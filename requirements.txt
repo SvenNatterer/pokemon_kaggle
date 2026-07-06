@@ -1,0 +1,5 @@
+kaggle
+gymnasium
+stable-baselines3[extra]
+numpy
+pandas
