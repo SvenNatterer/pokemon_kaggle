@@ -5,109 +5,350 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PTCG Replay Visualizer</title>
 <style>
+
   :root{
-    --bg:#0f1419; --panel:#1b232c; --panel2:#222d38; --line:#33414f;
-    --txt:#e6edf3; --dim:#8b98a5; --accent:#4aa3ff; --p0:#3a6df0; --p1:#e0533d;
+    --bg:#8fb974; --panel:#ffffff; --panel2:#f0f0f0; --line:#333;
+    --txt:#000; --dim:#555; --accent:#2a5d24; --p0:#3a6df0; --p1:#e0533d;
     --hpgood:#3fb950; --hpmid:#d29922; --hpbad:#f85149;
   }
   *{box-sizing:border-box;}
   body{margin:0;font-family:"Segoe UI",Meiryo,system-ui,sans-serif;background:var(--bg);color:var(--txt);font-size:13px;}
-  header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);
+  header{position:sticky;top:0;z-index:5;background:#2c3a26;color:white;border-bottom:1px solid var(--line);
          padding:8px 12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
-  header h1{font-size:15px;margin:0;color:var(--accent);white-space:nowrap;}
-  button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:6px;
+  header h1{font-size:15px;margin:0;color:white;white-space:nowrap;}
+  header .meta, header .meta b{color:white;}
+  button{background:#555;color:white;border:1px solid #222;border-radius:6px;
          padding:5px 11px;cursor:pointer;font-size:13px;}
-  button:hover{background:#2c3a48;}
+  button:hover{background:#777;}
   button:disabled{opacity:.4;cursor:default;}
   #slider{flex:1;min-width:160px;}
-  .meta{color:var(--dim);}
-  .meta b{color:var(--txt);}
-  #wrap{display:grid;grid-template-columns:1fr 360px;gap:10px;padding:10px;align-items:start;}
+  
+  #wrap{display:grid;grid-template-columns:300px 1fr;gap:20px;padding:10px;align-items:start;height:calc(100vh - 50px);}
   @media(max-width:1000px){#wrap{grid-template-columns:1fr;}}
-  .board{display:flex;flex-direction:column;gap:8px;}
-  .player{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;}
-  .player.p0{border-top:3px solid var(--p0);}
-  .player.p1{border-top:3px solid var(--p1);}
-  .player.p0.turn{box-shadow:0 0 0 2px var(--p0),0 0 16px #3a6df088;}
-  .player.p1.turn{box-shadow:0 0 0 2px var(--p1),0 0 16px #e0533d88;}
-  .turnflag{font-weight:700;font-size:11px;color:#fff;border-radius:5px;padding:1px 7px;background:var(--accent);}
-  .player.p0 .turnflag{background:var(--p0);} .player.p1 .turnflag{background:var(--p1);}
-  .prow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;}
-  .tag{font-weight:700;padding:1px 8px;border-radius:5px;}
-  .tag.p0{background:var(--p0);} .tag.p1{background:var(--p1);}
-  .counts{color:var(--dim);display:flex;gap:10px;flex-wrap:wrap;}
-  .counts b{color:var(--txt);}
-  .zone-label{color:var(--dim);font-size:11px;margin:4px 0 2px;}
-  .cards{display:flex;gap:6px;flex-wrap:wrap;min-height:4px;}
-  /* card */
-  .card{position:relative;width:74px;height:103px;border-radius:6px;background:var(--panel2);
-        border:1px solid var(--line);overflow:hidden;flex:none;}
-  .card.active{width:92px;height:128px;border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);}
-  .card.small{width:54px;height:75px;}
-  .card img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;}
-  .card .txt{position:absolute;inset:0;padding:4px;display:flex;flex-direction:column;gap:2px;}
-  .card .nm{font-size:10px;line-height:1.15;font-weight:600;max-height:36px;overflow:hidden;}
-  .card .stat{margin-top:auto;display:flex;flex-direction:column;gap:2px;}
-  .card .hp{font-size:10px;color:var(--dim);}
-  .card.faceup .txt{background:linear-gradient(180deg,#263340,#1a232c);}
-  .card.hasimg img{display:block;}            /* reveal art once it has loaded */
-  .card.hasimg .txt{background:none;}         /* image present: clear the panel bg so the art shows (all cards) */
-  .card.mon.hasimg .txt{background:linear-gradient(180deg,transparent 38%,rgba(0,0,0,.8) 100%);} /* battle & bench only: bottom shade for HP/energy */
-  .card.hasimg .nm{display:none;}             /* name is redundant with the art */
-  .card.hasimg .hp{color:var(--txt);text-shadow:0 1px 2px #000;}
-  .hpbar{height:4px;border-radius:3px;background:#30363d;overflow:hidden;margin-top:2px;}
-  .hpbar>i{display:block;height:100%;}
-  .energies{display:flex;gap:2px;flex-wrap:wrap;margin-top:2px;}
-  .en{width:13px;height:13px;border-radius:50%;font-size:9px;line-height:13px;text-align:center;color:#0b0b0b;font-weight:700;}
-  .badges{position:absolute;top:2px;right:2px;display:flex;flex-direction:column;gap:2px;align-items:flex-end;}
-  .badge{font-size:9px;padding:0 4px;border-radius:4px;background:#000a;border:1px solid var(--line);}
-  .badge.sc{background:#7b1fa2;} .badge.tool{background:#00695c;} .badge.ex{background:#b8860b;}
-  .stadium{text-align:center;color:var(--dim);padding:2px;}
-  .stadium b{color:var(--txt);}
-  .stadium[data-id]{cursor:help;}
-  .side{display:flex;flex-direction:column;gap:10px;}
-  .logbox,.selbox{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px 10px;}
-  .logbox h3,.selbox h3{margin:0 0 6px;font-size:12px;color:var(--accent);}
-  .log{white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;line-height:1.5;max-height:46vh;overflow:auto;}
+  
+  .side{display:flex;flex-direction:column;gap:10px;height:100%;}
+  .logbox, .selbox, .selactbox{background:var(--panel);border:1px solid var(--line);display:flex;flex-direction:column;}
+  .logbox{flex:1;min-height:0;}
+  .selbox{height:150px;flex:none;}
+  .selactbox{height:80px;flex:none;}
+  .side h3{margin:0;padding:4px;font-size:14px;background:var(--bg);color:var(--txt);border-bottom:1px solid var(--line);text-align:center;}
+  .log{padding:8px;white-space:pre-wrap;font-family:Consolas,monospace;font-size:12px;line-height:1.5;overflow:auto;flex:1;}
   .log .res{color:var(--hpgood);font-weight:700;}
   .log .atk{color:#ffb454;} .log .hp{color:#ff7b72;}
-  .selbox .sel{font-family:Consolas,monospace;color:#ffb454;}
+  .log .p0{color:blue;} .log .p1{color:red;}
+  .selbox .sel{padding:8px;font-family:Consolas,monospace;font-size:12px;overflow:auto;}
+  .selactbox .sel{padding:8px;font-family:Consolas,monospace;font-size:12px;}
+  
+  .board-area{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:10px;width:100%;height:100%;overflow-y:auto;}
+  .side-prizes { display:flex;flex-direction:column;justify-content:center;align-items:center;gap:15px;width:110px;height:100%;z-index:4; }
+  
+  .player-hand { display:flex;flex-direction:row;justify-content:center;z-index:2; }
+  .player-hand .card { margin-right: -45px; }
+  .player-hand .card:last-child { margin-right: 0; }
+  
+  .playmat{
+    position:relative;
+    width:100%;
+    max-width:800px;
+    min-width:600px;
+    min-height:820px;
+    flex:1;
+    border:2px solid white;
+    background:transparent;
+    display:flex;
+    flex-direction:column;
+    justify-content:space-evenly;
+    align-items:center;
+    padding: 10px 0;
+    overflow:hidden;
+  }
+  
+  .playmat::before{
+    content:'';
+    position:absolute;
+    top:50%;left:50%;
+    transform:translate(-50%,-50%);
+    width:350px;height:350px;
+    border:4px solid white;
+    border-radius:50%;
+    z-index:0;
+  }
+  .playmat::after{
+    content:'';
+    position:absolute;
+    top:50%;left:0;
+    transform:translateY(-50%);
+    width:100%;height:4px;
+    background:white;
+    z-index:0;
+  }
+  .playmat-center-circle{
+    position:absolute;
+    top:50%;left:50%;
+    transform:translate(-50%,-50%);
+    width:100px;height:100px;
+    border:4px solid white; background:transparent;
+    border-radius:50%;
+    z-index:1;
+  }
+  
+  .zone{z-index:2;}
+  
+  .bench{display:flex;flex-direction:row;gap:10px;} 
+  .p1-bench{}
+  .p0-bench{}
+  
+  .p1-hand{}
+  .p0-hand{}
+  
+  /* Rotate P1 Active, Bench, and Hand */
+  .p1-bench .card, #active1 .card, .p1-hand .card { transform: rotate(180deg); }
+  
+  .active-area{display:flex;flex-direction:column;align-items:center;gap:30px;z-index:2;}
+  .active-card{display:flex;justify-content:center;}
+  
+  .prize-dash{width:44px;height:61px;border:2px dashed rgba(255,255,255,0.5);border-radius:6px;flex:none;}
+  
+  .res-p1{position:absolute;top:5px;left:50%;transform:translateX(-50%);color:#d32f2f;font-size:20px;font-weight:bold;white-space:nowrap;z-index:3;}
+  .res-p0{position:absolute;bottom:5px;left:50%;transform:translateX(-50%);color:#1976d2;font-size:20px;font-weight:bold;white-space:nowrap;z-index:3;}
+  
+  .stats{position:absolute;font-size:24px;font-weight:bold;}
+  .stats div{margin-bottom:10px;}
+  .p1-stats{left:30px;top:30px;text-align:left;}
+  .p0-stats{right:30px;bottom:30px;text-align:right;}
+  .stats-turn{color:#ffeb3b;text-shadow:1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000;}
+  .stats-text{color:black;}
+  
+  .card{position:relative;width:74px;height:103px;border-radius:6px;background:var(--panel2);
+        border:1px solid var(--line);flex:none;}
+  .active-card .card{width:100px;height:140px;}
+
+  .hp-text {
+    position: absolute;
+    bottom: 2px;
+    right: 4px;
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+    -webkit-text-stroke: 1px black;
+    text-shadow: 1px 1px 2px black;
+    z-index: 10;
+    pointer-events: none;
+  }
+  .active-card .hp-text {
+    font-size: 18px;
+    bottom: 4px;
+    right: 6px;
+  }
+  
+  @keyframes popCard {
+    0% { transform: scale(0.5); opacity: 0; }
+    50% { transform: scale(1.1); opacity: 1; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .played-cards {
+    position: absolute;
+    top: 50%; left: 30px;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    z-index: 50;
+    pointer-events: none;
+  }
+  .played-cards .card {
+    width: 148px;
+    height: 206px;
+    border-radius: 10px;
+    box-shadow: 0 15px 40px rgba(0,0,0,0.8);
+    animation: popCard 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  }
+  .stadium-card {
+    position: absolute;
+    top: 50%; right: 30px;
+    transform: translateY(-50%);
+    z-index: 10;
+  }
+  .stadium-card .card {
+    width: 110px;
+    height: 153px;
+    border-radius: 8px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+  }
+  
+  .badges {
+    position: absolute;
+    top: -10px;
+    left: -10px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    z-index: 10;
+  }
+  .p1-bench .badges, #active1 .badges {
+    top: auto; bottom: -10px;
+    left: auto; right: -10px;
+    transform: rotate(180deg);
+  }
+  .badge {
+    background: #ff9800;
+    color: white;
+    font-size: 10px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    border: 1px solid black;
+    font-weight: bold;
+    text-shadow: 1px 1px 1px black;
+  }
+  /* Counter-rotate text for P1 */
+  .p1-bench .hp-text, #active1 .hp-text, .p1-hand .hp-text {
+    transform: rotate(180deg);
+    bottom: auto; top: 2px;
+    right: auto; left: 4px;
+  }
+  #active1 .hp-text { top: 4px; left: 6px; }
+  
+  .card img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:5px;display:none;}
+  .card .txt{position:absolute;inset:0;padding:4px;display:flex;flex-direction:column;gap:2px;}
+  .card .nm{font-size:10px;line-height:1.15;font-weight:600;max-height:36px;overflow:hidden;}
+  .card.hasimg img{display:block;}
+  .card.hasimg .txt{display:none;}
+  .p1-bench .txt, #active1 .txt, .p1-hand .txt { transform: rotate(180deg); }
+  
+  .dmg-text {
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: white;
+    font-size: 24px;
+    font-weight: bold;
+    -webkit-text-stroke: 1px black;
+    text-shadow: 1px 1px 3px black;
+    background: rgba(255, 0, 0, 0.8);
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+  .p1-bench .dmg-text, #active1 .dmg-text, .p1-hand .dmg-text {
+    top: auto; bottom: -5px;
+    transform: translateX(-50%) rotate(180deg);
+  }
+  #active1 .dmg-text {
+    font-size: 40px;
+    width: 60px;
+    height: 60px;
+    left: 50%;
+    top: auto; bottom: -30px;
+    transform: translateX(-50%) rotate(180deg);
+    color: white;
+  }
+  #active0 .dmg-text {
+    font-size: 40px;
+    width: 60px;
+    height: 60px;
+    top: -30px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: white;
+  }
+  
+  .card.small {
+    width: 44px;
+    height: 61px;
+    box-shadow: 0px 2px 4px rgba(0,0,0,0.5);
+  }
+
+  .energy-icons {
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    display: flex;
+    flex-wrap: wrap;
+    width: 30px;
+    justify-content: flex-end;
+    gap: 2px;
+    z-index: 10;
+    pointer-events: none;
+  }
+  #active0 .energy-icons {
+    width: 50px;
+    gap: 4px;
+  }
+  /* For P1 (rotated cards), we want physical top-right -> bottom-left */
+  .p1-bench .energy-icons, .p1-hand .energy-icons {
+    top: auto; bottom: -10px;
+    right: auto; left: -10px;
+    transform: rotate(180deg);
+  }
+  #active1 .energy-icons {
+    top: auto; bottom: -10px;
+    right: auto; left: -10px;
+    transform: rotate(180deg);
+    width: 50px;
+    gap: 4px;
+  }
+  .energy-icon {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid black;
+    box-shadow: 1px 1px 2px rgba(0,0,0,0.5);
+    background-size: cover;
+    background-position: center;
+    position: relative;
+  }
+  /* Pseudo-element for SVG symbol overlay */
+  .energy-icon::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 70%;
+  }
+  .active-card .energy-icon {
+    width: 24px;
+    height: 24px;
+    border-width: 2px;
+  }
+  
   #drop{position:fixed;inset:0;background:#000c;display:flex;align-items:center;justify-content:center;
         flex-direction:column;gap:14px;z-index:20;}
-  #drop .box{border:2px dashed var(--accent);border-radius:14px;padding:40px 60px;text-align:center;color:var(--txt);}
+  #drop .box{border:2px dashed #fff;border-radius:14px;padding:40px 60px;text-align:center;color:white;}
   #drop.hide{display:none;}
   .hint{color:var(--dim);font-size:12px;}
   code{background:#0d1117;padding:1px 5px;border-radius:4px;}
-  /* hover preview */
+  
   #preview{position:fixed;left:0;top:0;z-index:30;display:none;width:auto;pointer-events:none;
-           background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:6px;
-           box-shadow:0 10px 30px #000b;}
+           background:#fff;border:1px solid #333;border-radius:10px;padding:6px;
+           box-shadow:0 10px 30px #000b;color:#000;}
   #preview .pvrow{display:flex;gap:8px;align-items:flex-start;}
   #preview .pvmain{width:240px;flex:none;}
   #preview img{display:block;width:100%;border-radius:6px;background:var(--panel2);}
-  #preview .cap{margin-top:6px;font-size:12px;line-height:1.4;color:var(--txt);}
+  #preview .cap{margin-top:6px;font-size:12px;line-height:1.4;}
   #preview .cap .sub{color:var(--dim);margin-top:2px;}
-  /* attached energy as cards: same energy fanned/overlapped; groups laid out horizontally, separated by a ×N count */
   #preview .pvenergy{margin-top:6px;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;}
   #preview .egroup{display:flex;align-items:center;gap:6px;}
   #preview .estack{display:inline-flex;}
   #preview .estack img{width:72px;border-radius:5px;background:var(--panel2);box-shadow:0 1px 5px #000a;}
   #preview .estack img:not(:first-child){margin-left:-52px;}
   #preview .ecount{font-size:12px;font-weight:700;color:var(--dim);}
-  /* attached tools as full-size panels on the right */
   #preview .pvtools{flex-direction:column;gap:8px;width:240px;flex:none;}
-  #preview .pvtools .tname{font-size:12px;color:var(--dim);margin-top:4px;line-height:1.35;}
-  /* clickable zone (trash) + grid modal */
-  .zone-open{cursor:pointer;border:1px solid var(--line);border-radius:5px;padding:0 6px;}
-  .zone-open:hover{background:#2c3a48;border-color:var(--accent);}
+  
   .zoom{position:fixed;inset:0;z-index:25;background:#000b;display:flex;align-items:flex-start;justify-content:center;padding-top:5vh;}
   .zoom.hide{display:none;}
   .zoom-box{display:flex;flex-direction:column;width:min(92vw,900px);min-height:70vh;max-height:86vh;
             background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;}
   .zoom-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
-  #zoom-title{font-size:14px;font-weight:700;color:var(--accent);}
+  #zoom-title{font-size:14px;font-weight:700;}
   .zoom-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(74px,1fr));gap:8px;
              justify-items:center;align-content:flex-start;flex:1;min-height:0;overflow:auto;}
+
 </style>
 </head>
 <body>
@@ -115,6 +356,7 @@
   <h1>PTCG Replay</h1>
   <span id="matchup-info" style="color: var(--accent); font-weight: bold; margin-right: 15px; font-size: 14px;"></span>
   <button id="prev" data-i18n="prev">◀ 前へ</button>
+  <button id="playpause" data-i18n="play">▶ Play</button>
   <input id="slider" type="range" min="0" max="0" value="0">
   <button id="next" data-i18n="next">次へ ▶</button>
   <span class="meta"><span data-i18n="step">手数</span> <b id="stepno">0/0</b></span>
@@ -128,20 +370,66 @@
 </header>
 
 <div id="wrap" style="display:none">
-  <div class="board">
-    <div class="player p1" id="panel1"></div>
-    <div class="stadium" id="stadium"></div>
-    <div class="player p0" id="panel0"></div>
-  </div>
   <div class="side">
-    <div class="selbox">
-      <h3 data-i18n="selectedTitle">この手で選んだアクション</h3>
-      <div class="sel" id="selected">-</div>
-    </div>
     <div class="logbox">
-      <h3 data-i18n="logTitle">ログ（この選択まで）</h3>
+      <h3 data-i18n="logTitle">Log</h3>
       <div class="log" id="log"></div>
     </div>
+    <div class="selbox">
+      <h3 data-i18n="selectedTitle">Select</h3>
+      <div class="sel" id="selected">-</div>
+    </div>
+    <div class="selactbox">
+      <h3>Selected Action</h3>
+      <div class="sel" id="selected-action">-</div>
+    </div>
+  </div>
+  
+  <div class="board-area">
+    <!-- P1 Prizes (Left) -->
+    <div class="side-prizes p1-prizes" id="prize1"></div>
+    
+    <!-- Playmat -->
+    <div class="playmat">
+      <div class="playmat-center-circle"></div>
+      
+      <!-- Played Cards Overlay -->
+      <div class="played-cards" id="played-cards"></div>
+      
+      <!-- Stadium -->
+      <div class="stadium-card" id="stadium-card"></div>
+      
+      <!-- P1 Hand -->
+      <div class="player-hand p1-hand zone" id="hand1"></div>
+      
+      <!-- P1 Bench -->
+      <div class="bench p1-bench zone" id="bench1"></div>
+      
+      <!-- P1 Stats -->
+      <div class="stats p1-stats" id="stats1"></div>
+      
+      <!-- Center Actives -->
+      <div class="active-area">
+        <div class="active-card" id="active1"></div>
+        <div class="active-card" id="active0"></div>
+      </div>
+      
+      <!-- Result Text -->
+      <div class="res-p1" id="res1"></div>
+      <div class="res-p0" id="res0"></div>
+      
+      <!-- P0 Stats -->
+      <div class="stats p0-stats" id="stats0"></div>
+      
+      <!-- P0 Bench -->
+      <div class="bench p0-bench zone" id="bench0"></div>
+      
+      <!-- P0 Hand -->
+      <div class="player-hand p0-hand zone" id="hand0"></div>
+    </div>
+    
+    <!-- P0 Prizes (Right) -->
+    <div class="side-prizes p0-prizes" id="prize0"></div>
   </div>
 </div>
 
@@ -151,7 +439,7 @@
   <div class="hint" data-i18n-html="dropHint"><code>visualize_data()</code> が出力したリプレイ JSON を読み込みます</div>
 </div></div>
 
-<div id="preview"><div class="pvrow"><div class="pvmain"><img id="pvimg" alt=""><div class="cap" id="pvcap"></div><div class="pvenergy" id="pvenergy"></div></div><div class="pvtools" id="pvtools"></div></div></div>
+<div id="preview"><div class="pvrow"><div class="pvmain"><img id="pvimg" alt=""><div class="cap" id="pvcap"></div></div><div class="pvtools" id="pvtools"></div></div></div>
 
 <div id="zoom" class="zoom hide"><div class="zoom-box"><div class="zoom-head"><span id="zoom-title">トラッシュ</span><button id="zoom-close" data-i18n="close">✕ 閉じる</button></div><div class="zoom-grid" id="zoom-grid"></div></div></div>
 
@@ -189,6 +477,7 @@ const I18N={
     poisonedV:'どく', burnedV:'やけど', asleepV:'ねむり', paralyzedV:'まひ', confusedV:'こんらん', recover:'回復',
     lCoin:(p,h)=>`${p}: コイン ${h}`, heads:'おもて', tails:'うら',
     lResult:(who,r)=>`\n=== 結果: ${who}（${r}）===`, resWin:p=>`P${p} の勝ち`, resDraw:'引き分け',
+    play:'▶ 再生', pause:'⏸ 停止'
   },
   en:{
     prev:'◀ Prev', next:'Next ▶', step:'step', turn:'turn', active:'active', ctx:'ctx', openFile:'Open file',
@@ -216,6 +505,7 @@ const I18N={
     poisonedV:'poisoned', burnedV:'burned', asleepV:'asleep', paralyzedV:'paralyzed', confusedV:'confused', recover:' (recovered)',
     lCoin:(p,h)=>`${p}: coin ${h}`, heads:'heads', tails:'tails',
     lResult:(who,r)=>`\n=== Result: ${who} (${r}) ===`, resWin:p=>`P${p} wins`, resDraw:'Draw',
+    play:'▶ Play', pause:'⏸ Pause'
   }
 };
 function T(key,...args){ const v=(I18N[LANG]||I18N.ja)[key]; return typeof v==='function'?v(...args):(v!=null?v:key); }
@@ -238,25 +528,27 @@ let SNAP=[], idx=0, names={}, attacks={};
 
 // ---- loading ----
 const drop=document.getElementById('drop'), wrap=document.getElementById('wrap');
-function loadText(text){
-  try{ SNAP = JSON.parse(text); }catch(e){ alert('JSON parse error: '+e); return; }
-  if(!Array.isArray(SNAP)||!SNAP.length){ alert(T('notArray')); return; }
-  // build id->name from every card seen
-  names={};
-  for(const s of SNAP){ collectNames(s.current); }
-  idx=0;
-  
-  if (SNAP.length > 0 && SNAP[0].metadata) {
+function loadText(txt){
+  pauseAutoplay();
+  try{
+    const arr=JSON.parse(txt);
+    if(!Array.isArray(arr))throw new Error(T('notArray'));
+    SNAP=arr;
+    idx=0;
+    names={};
+    for(const s of SNAP){ collectNames(s.current); }
+    if (SNAP.length > 0 && SNAP[0].metadata) {
       const m = SNAP[0].metadata;
       document.getElementById('matchup-info').textContent = `${m.p0_name} ⚔️ ${m.p1_name}`;
-  } else {
+    } else {
       document.getElementById('matchup-info').textContent = "";
-  }
-  
-  document.getElementById('slider').max = SNAP.length-1;
-  drop.classList.add('hide'); wrap.style.display='grid';
-  pinHeaderWidths();
-  render();
+    }
+    document.getElementById('slider').max=SNAP.length-1;
+    drop.classList.add('hide');
+    wrap.style.display='grid';
+    pinHeaderWidths();
+    render();
+  }catch(e){alert(e);}
 }
 function collectNames(cur){
   if(!cur) return;
@@ -286,10 +578,39 @@ window.addEventListener('drop',e=>{
 });
 
 // ---- navigation ----
-function go(d){ idx=Math.max(0,Math.min(SNAP.length-1, idx+d)); render(); }
+let isPlaying = false;
+let playInterval = null;
+
+function pauseAutoplay() {
+  if(!isPlaying) return;
+  isPlaying = false;
+  clearInterval(playInterval);
+  document.getElementById('playpause').textContent = T('play');
+}
+
+function startAutoplay() {
+  if (idx >= SNAP.length - 1) return;
+  isPlaying = true;
+  document.getElementById('playpause').textContent = T('pause');
+  playInterval = setInterval(() => {
+    if (idx < SNAP.length - 1) {
+      idx++;
+      render();
+    } else {
+      pauseAutoplay();
+    }
+  }, 400);
+}
+
+document.getElementById('playpause').onclick = () => {
+  if (isPlaying) pauseAutoplay();
+  else startAutoplay();
+};
+
+function go(d){ pauseAutoplay(); idx=Math.max(0,Math.min(SNAP.length-1, idx+d)); render(); }
 document.getElementById('prev').onclick=()=>go(-1);
 document.getElementById('next').onclick=()=>go(1);
-document.getElementById('slider').oninput=e=>{ idx=+e.target.value; render(); };
+document.getElementById('slider').oninput=e=>{ pauseAutoplay(); idx=+e.target.value; render(); };
 window.addEventListener('keydown',e=>{
   if(e.key==='Escape'){ closeZoom(); return; }
   if(e.key==='ArrowLeft')go(-1); else if(e.key==='ArrowRight')go(1);
@@ -299,21 +620,10 @@ window.addEventListener('keydown',e=>{
 const preview=document.getElementById('preview'),
       pvImg=document.getElementById('pvimg'),
       pvCap=document.getElementById('pvcap'),
-      pvEnergy=document.getElementById('pvenergy'),
       pvTools=document.getElementById('pvtools');
 let pvId=null;
 pvImg.onload =()=>{ pvImg.style.display='block'; };
 pvImg.onerror=()=>{ pvImg.style.display='none'; };   // no art → caption only
-// energy cards grouped by id: same id fanned/overlapped; groups laid out horizontally, separated by a ×N count
-function energyCardsHtml(ids){
-  const order=[], n={};
-  for(const id of ids){ if(!(id in n)){ n[id]=0; order.push(id); } n[id]++; }
-  return order.map(id=>{
-    const imgs=Array.from({length:n[id]},()=>`<img src="${cardImgUrl(id)}" onerror="this.remove()" title="${nm(id)}">`).join('');
-    const cnt=`<span class="ecount">×${n[id]}</span>`;
-    return `<div class="egroup"><span class="estack">${imgs}</span>${cnt}</div>`;
-  }).join('');
-}
 function showPreview(card){
   const id=card.dataset.id;
   if(id!==pvId){
@@ -323,9 +633,6 @@ function showPreview(card){
     let cap=`<b>${nm(id)}</b>`;
     if(card.dataset.hp!=null) cap+=`<div class="sub">HP ${card.dataset.hp}/${card.dataset.mhp}</div>`;
     pvCap.innerHTML=cap;
-    const encards=card.dataset.encards?card.dataset.encards.split(','):[];
-    pvEnergy.innerHTML=encards.length?energyCardsHtml(encards):'';
-    pvEnergy.style.display=encards.length?'flex':'none';
     const tools=card.dataset.tools?card.dataset.tools.split(','):[];
     pvTools.innerHTML=tools.length
       ? tools.map(t=>`<div class="ptool"><img src="${cardImgUrl(t)}" onerror="this.remove()"><div class="tname">${nm(t)}</div></div>`).join('')
@@ -389,14 +696,47 @@ function hpBar(hp,max){
 // p: Pokemon object. opts: {active, status:[...]}
 function pokemonCard(p, opts={}){
   if(!p) return `<div class="card ${opts.active?'active':''} faceup"><div class="txt"><div class="nm">${T('none')}</div></div></div>`;
-  const cls='card mon'+(opts.active?' active':'')+' faceup';   // 'mon' = battle/bench pokemon (gets the HP shade)
+  const cls='card mon'+(opts.active?' active':'')+' faceup';
   const url=cardImgUrl(p.id);
   const badges=[];
   for(const s of (opts.status||[])) badges.push(`<span class="badge sc">${s}</span>`);
   for(const t of (p.tools||[])) badges.push(`<span class="badge tool" title="${nm(t.id)}">${T('tool')}</span>`);
+  
+  let dmgHtml = '';
+  const damage = p.maxHp - p.hp;
+  if (damage > 0) {
+      dmgHtml = `<div class="dmg-text">${damage}</div>`;
+  }
+  
+  let energyHtml = '';
+  if (p.energies && p.energies.length > 0) {
+      const eIcons = p.energies.map((t, idx) => {
+          let color = '#ccc';
+          let svg = '';
+          if(t===1) { color='#78C850'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><path d=%22M17.5 2c-2.3 0-6 2.5-8.5 6-2.5-3.5-6.2-6-8.5-6 0 4.5 1.5 9.5 5.5 12.5 1 .8 2 1.2 3 1.5v6h2v-6c1-.3 2-.7 3-1.5 4-3 5.5-8 5.5-12.5z%22/></svg>')"; }
+          if(t===2) { color='#F08030'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><path d=%22M12 2C8 6 4 10 4 15c0 4.4 3.6 8 8 8s8-3.6 8-8c0-5-4-9-8-13z%22/></svg>')"; }
+          if(t===3) { color='#6890F0'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><path d=%22M12 2C8 6 4 10 4 15c0 4.4 3.6 8 8 8s8-3.6 8-8c0-5-4-9-8-13z%22/></svg>')"; }
+          if(t===4) { color='#F8D030'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><path d=%22M13 2L3 14h7v8l10-12h-7z%22/></svg>')"; }
+          if(t===5) { color='#F85888'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><circle cx=%2212%22 cy=%2212%22 r=%226%22/></svg>')"; }
+          if(t===6) { color='#C03028'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><path d=%22M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 14c-2.2 0-4-1.8-4-4s1.8-4 4-4 4 1.8 4 4-1.8 4-4 4z%22/></svg>')"; }
+          if(t===7) { color='#705848'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><path d=%22M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c4.4 0 8.2-2.8 9.5-6.8-1.4 1.2-3.3 1.8-5.5 1.8-4.4 0-8-3.6-8-8 0-2.2.6-4.1 1.8-5.5C15.8 4.8 13 2 12 2z%22/></svg>')"; }
+          if(t===8) { color='#B8B8D0'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><polygon points=%2212,2 22,7 22,17 12,22 2,17 2,7%22/></svg>')"; }
+          if(t===9) { color='#7038F8'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><path d=%22M12 2l4 8 8 1-6 6 1 8-7-4-7 4 1-8-6-6 8-1z%22/></svg>')"; }
+          if(t===0) { color='#A8A8A8'; svg="url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22black%22><polygon points=%2212,2 22,12 12,22 2,12%22/></svg>')"; }
+          
+          return `<div class="energy-icon" style="background:${color}; --icon-svg: ${svg}" title="Energy ${t}"><style> .energy-icon[title="Energy ${t}"]::after { background-image: var(--icon-svg); } </style></div>`;
+      }).join('');
+      energyHtml = `<div class="energy-icons">${eIcons}</div>`;
+  }
+
   const img = url?`<img src="${url}" onload="this.parentElement.classList.add('hasimg')" onerror="this.remove()">`:'';
-  return `<div class="${cls}" title="${nm(p.id)} HP${p.hp}/${p.maxHp}" data-id="${p.id}" data-hp="${p.hp}" data-mhp="${p.maxHp}" data-encards="${(p.energyCards||[]).map(e=>e.id).join(',')}" data-tools="${(p.tools||[]).map(t=>t.id).join(',')}">
+  const vt = p.serial ? ` style="view-transition-name: card_${p.serial};"` : '';
+  
+  return `<div class="${cls}"${vt} title="${nm(p.id)} HP${p.hp}/${p.maxHp}" data-id="${p.id}" data-hp="${p.hp}" data-mhp="${p.maxHp}" data-encards="${(p.energyCards||[]).map(e=>e.id).join(',')}" data-tools="${(p.tools||[]).map(t=>t.id).join(',')}">
     ${img}
+    ${dmgHtml}
+    ${energyHtml}
+    <div class="hp-text">${p.hp}/${p.maxHp}</div>
     <div class="badges">${badges.join('')}</div>
     <div class="txt">
       <div class="nm">${p.name||nm(p.id)}</div>
@@ -412,7 +752,8 @@ function plainCard(c, small){
   if(!c) return `<div class="card ${small?'small':''} faceup"><div class="txt"><div class="nm">${T('facedown')}</div></div></div>`;
   const url=cardImgUrl(c.id);
   const img = url?`<img src="${url}" onload="this.parentElement.classList.add('hasimg')" onerror="this.remove()">`:'';
-  return `<div class="card ${small?'small':''} faceup" title="${nm(c.id)}" data-id="${c.id}">${img}<div class="txt"><div class="nm">${c.name||nm(c.id)}</div></div></div>`;
+  const vt = c.serial ? ` style="view-transition-name: card_${c.serial};"` : '';
+  return `<div class="card ${small?'small':''} faceup"${vt} title="${nm(c.id)}" data-id="${c.id}">${img}<div class="txt"><div class="nm">${c.name||nm(c.id)}</div></div></div>`;
 }
 
 function statusOf(ps){
@@ -527,36 +868,100 @@ function pinHeaderWidths(){
 }
 
 // ---- main render ----
-function render(){
+function renderInner(){
   const s=SNAP[idx], cur=s.current;
   document.getElementById('slider').value=idx;
   document.getElementById('stepno').textContent=`${idx+1}/${SNAP.length}`;
   document.getElementById('turn').textContent=cur.turn;
   document.getElementById('active').textContent='P'+cur.yourIndex;
   document.getElementById('ctx').textContent=(s.select&&s.select.context)||'-';
-  const res=document.getElementById('result');
-  res.innerHTML = cur.result>=0 ? `<b style="color:var(--hpgood)">RESULT: ${cur.result===2?T('draw'):T('win',cur.result)}</b>` : '';
-
+  
   const meta=SNAP[0].metadata||{};
-  renderPlayer(document.getElementById('panel1'), cur.players[1], 'p1', cur.yourIndex===1, meta.p1_name);
-  renderPlayer(document.getElementById('panel0'), cur.players[0], 'p0', cur.yourIndex===0, meta.p0_name);
-  const stad=document.getElementById('stadium');
-  if(cur.stadium&&cur.stadium.length){
-    const sc=cur.stadium[0];
-    stad.innerHTML=`🏟 ${T('stadium')}: <b>${sc.name||nm(sc.id)}</b>`;
-    stad.setAttribute('data-id', sc.id);          // makes the line hoverable for the preview
-  }else{
-    stad.innerHTML=`🏟 ${T('stadium')}: ${T('none2')}`;
-    stad.removeAttribute('data-id');
+  const p1_name = meta.p1_name || 'Player 1';
+  const p0_name = meta.p0_name || 'Player 0';
+  
+  // Render Hands
+  document.getElementById('hand1').innerHTML = cur.players[1].hand ? cur.players[1].hand.map(c=>plainCard(c)).join('') : '';
+  document.getElementById('hand0').innerHTML = cur.players[0].hand ? cur.players[0].hand.map(c=>plainCard(c)).join('') : '';
+  
+  // Render Benches
+  document.getElementById('bench1').innerHTML = cur.players[1].bench ? cur.players[1].bench.map(c=>pokemonCard(c)).join('') : '';
+  document.getElementById('bench0').innerHTML = cur.players[0].bench ? cur.players[0].bench.map(c=>pokemonCard(c)).join('') : '';
+  
+  // Render Actives
+  document.getElementById('active1').innerHTML = (cur.players[1].active&&cur.players[1].active.length) ? pokemonCard(cur.players[1].active[0], {active:true}) : '';
+  document.getElementById('active0').innerHTML = (cur.players[0].active&&cur.players[0].active.length) ? pokemonCard(cur.players[0].active[0], {active:true}) : '';
+  
+  // Render Prizes
+  const renderPrize = c => (c && c.id && c.id !== 'Unknown') ? plainCard(c, true) : '<div class="prize-dash"></div>';
+  document.getElementById('prize1').innerHTML = (cur.players[1].prize || []).map(renderPrize).join('');
+  document.getElementById('prize0').innerHTML = (cur.players[0].prize || []).map(renderPrize).join('');
+  
+  // Render Stadium
+  document.getElementById('stadium-card').innerHTML = (cur.stadium && cur.stadium.length) ? plainCard(cur.stadium[0]) : '';
+  
+  // Render Played Cards from this step's logs
+  // Reconstruct card objects since ev just has cardId
+  const playedHtml = (s.logs || []).filter(ev => ev.type === 'Play' && ev.cardId).map(ev => plainCard({id: ev.cardId})).join('');
+  const playedCardsEl = document.getElementById('played-cards');
+  if(playedHtml) {
+    playedCardsEl.innerHTML = playedHtml;
+    // reset animation
+    playedCardsEl.style.animation = 'none';
+    playedCardsEl.offsetHeight; /* trigger reflow */
+    playedCardsEl.style.animation = null;
+    playedCardsEl.style.display = 'flex';
+  } else {
+    playedCardsEl.innerHTML = '';
+    playedCardsEl.style.display = 'none';
+  }
+  
+  // Render Stats
+  document.getElementById('stats1').innerHTML = `
+    <div class="stats-turn">${cur.yourIndex===1 ? 'First' : 'Second'}</div>
+    <div class="stats-text">Discard ${cur.players[1].discard ? cur.players[1].discard.length : 0}</div>
+    <div class="stats-text">Deck ${cur.players[1].deckCount}</div>
+  `;
+  document.getElementById('stats0').innerHTML = `
+    <div class="stats-turn">${cur.yourIndex===0 ? 'First' : 'Second'}</div>
+    <div class="stats-text">Discard ${cur.players[0].discard ? cur.players[0].discard.length : 0}</div>
+    <div class="stats-text">Deck ${cur.players[0].deckCount}</div>
+  `;
+  
+  // Results
+  if(cur.result >= 0) {
+      if(cur.result === 0) {
+         document.getElementById('res0').textContent = `[Win] ${p0_name} (+1)`;
+         document.getElementById('res1').textContent = `[Loss] ${p1_name} (-3)`;
+      } else if (cur.result === 1) {
+         document.getElementById('res1').textContent = `[Win] ${p1_name} (+1)`;
+         document.getElementById('res0').textContent = `[Loss] ${p0_name} (-3)`;
+      } else {
+         document.getElementById('res0').textContent = `[Draw]`;
+         document.getElementById('res1').textContent = `[Draw]`;
+      }
+  } else {
+      document.getElementById('res0').textContent = '';
+      document.getElementById('res1').textContent = '';
   }
 
   document.getElementById('selected').textContent=describeSelected(s);
-  document.getElementById('log').innerHTML=(s.logs||[]).map(decode).filter(x=>x!=null).join('\n');
+  document.getElementById('selected-action').textContent= s.select ? (s.select.option && s.select.option[0] && s.select.option[0].name ? s.select.option[0].name : describeSelected(s)) : '-';
+  document.getElementById('log').innerHTML=(s.logs||[]).map(decode).filter(x=>x!=null).join('\\n');
 
   document.getElementById('prev').disabled=idx===0;
   document.getElementById('next').disabled=idx===SNAP.length-1;
   if(zoomPi!==null) renderZoom();   // keep an open trash grid in sync while navigating
 }
+
+function render(){
+  if(document.startViewTransition) {
+    document.startViewTransition(() => { renderInner(); });
+  } else {
+    renderInner();
+  }
+}
+
 
 // ---- language toggle + initial apply ----
 document.getElementById('langbtn').onclick=()=>setLang(LANG==='ja'?'en':'ja');

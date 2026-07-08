@@ -52,17 +52,26 @@ def pretrain():
         model = CustomPPO.load(model_path, env=env)
     else:
         print("Creating new Custom PPO model...")
+        
+        from src.custom_policy import PokemonTCGFeatureExtractor
+        policy_kwargs = dict(
+            features_extractor_class=PokemonTCGFeatureExtractor,
+        )
+        
         model = CustomPPO(
             PokemonTCGRecurrentPolicy, 
             env, 
             verbose=1, 
             learning_rate=3e-4,
-            n_steps=1024,
-            batch_size=1024,
-            n_epochs=3,
+            n_steps=2048,
+            batch_size=512,
+            n_epochs=5,
+            gamma=0.999,
+            ent_coef=0.02,
             c_aux=0.5,
             device="cpu",
-            tensorboard_log="logs/"
+            tensorboard_log="logs/",
+            policy_kwargs=policy_kwargs
         )
     
     # Initialize wandb

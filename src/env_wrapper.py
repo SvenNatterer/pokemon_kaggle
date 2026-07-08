@@ -1,11 +1,52 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import random
 import os
 
 from cg.game import battle_start, battle_select, battle_finish
-from cg.api import to_observation_class, Observation
+from cg.api import AreaType, OptionType, SelectContext, to_observation_class, Observation
+def _pokemon_key(pokemon):
+    if pokemon is None:
+        return None
+    serial = getattr(pokemon, "serial", None)
+    return serial if serial is not None else getattr(pokemon, "id", None)
+
+def _same_pokemon(a, b):
+    a_key = _pokemon_key(a)
+    return a_key is not None and a_key == _pokemon_key(b)
+
+def select_action_indices(obs, action=None, perspective=0):
+    select = obs.select
+    valid_options = len(select.option) if select and select.option else 0
+    if valid_options == 0:
+        return []
+
+    min_count = max(0, select.minCount if select else 0)
+    max_count = min(valid_options, max(0, select.maxCount if select else 0))
+    if max_count == 0:
+        return []
+
+    try:
+        action = int(action) if action is not None else None
+    except Exception:
+        action = None
+        
+    preferred = action if action is not None and 0 <= action < valid_options else None
+    min_required = min(min_count, max_count)
+    if preferred is None and min_required == 0:
+        return []
+
+    selected = []
+    if preferred is not None:
+        selected.append(preferred)
+
+    for index in range(valid_options):
+        if len(selected) >= min_required:
+            break
+        if index not in selected:
+            selected.append(index)
+
+    return [int(index) for index in selected[:max_count]]
 
 class PokemonTCGEnv(gym.Env):
     def __init__(self, my_deck: list[int], opponent_deck: list[int], opponent_model_path=None):
@@ -19,8 +60,8 @@ class PokemonTCGEnv(gym.Env):
         self.max_options = 1000 
         self.action_space = spaces.Discrete(self.max_options)
         
-        # Observation space: 100-dim vector + action mask + aux target
-        self.vector_dim = 100
+        # Observation space: 1500-dim vector + action mask + aux target
+        self.vector_dim = 1500
         self.aux_dim = 2000
         self.observation_space = spaces.Dict({
             "vector": spaces.Box(low=-1000, high=1000, shape=(self.vector_dim,), dtype=np.float32),
@@ -60,28 +101,18 @@ class PokemonTCGEnv(gym.Env):
         # Track dense reward starting with time penalty
         step_reward = -0.005
         
-        # Basic parsing: choose action
         valid_options = len(old_obs.select.option) if old_obs.select and old_obs.select.option else 0
-        min_c = old_obs.select.minCount if old_obs.select else 0
-        max_c = old_obs.select.maxCount if old_obs.select else 0
-        
-        if max_c == 0:
-            action_list = []
-        elif action >= valid_options:
-            # Fallback to random if invalid action
+        if action < 0 or action >= valid_options:
             step_reward -= 0.1 # Invalid action penalty
-            sample_size = min(valid_options, max_c)
-            action_list = random.sample(list(range(valid_options)), sample_size)
-        else:
-            action_list = [action]
-            if len(action_list) < min_c:
-                remaining = min_c - 1
-                available = [i for i in range(valid_options) if i != action]
-                if remaining <= len(available):
-                    action_list += random.sample(available, remaining)
-            action_list = action_list[:max_c]
             
-        action_list = [int(x) for x in action_list]
+        if valid_options > 0 and 0 <= action < valid_options:
+            chosen_option = old_obs.select.option[action]
+            if chosen_option.type == getattr(OptionType, 'ATTACK', 11):
+                step_reward += 0.1
+            elif chosen_option.type == getattr(OptionType, 'END', 14):
+                step_reward -= 0.02
+                
+        action_list = select_action_indices(old_obs, action, perspective=0)
         
         self.current_obs_dict = battle_select(action_list)
         
@@ -120,18 +151,18 @@ class PokemonTCGEnv(gym.Env):
         # Prize Card Taken/Lost
         delta_prize_0 = len(old_p0.prize) - len(new_p0.prize)
         if delta_prize_0 > 0:
-            reward += delta_prize_0 * 0.5
+            reward += delta_prize_0 * 1.0
             
         delta_prize_1 = len(old_p1.prize) - len(new_p1.prize)
         if delta_prize_1 > 0:
-            reward -= delta_prize_1 * 0.5
+            reward -= delta_prize_1 * 1.0
             
         # Deck shrink penalty
         delta_deck_0 = old_p0.deckCount - new_p0.deckCount
         if delta_deck_0 > 0:
             reward -= delta_deck_0 * 0.01
 
-        # Damage Deltas
+        # Damage Deltas (BOOSTED for Aggro)
         def sum_hp(p):
             hp = 0
             if p.active and p.active[0]: hp += p.active[0].hp
@@ -141,11 +172,11 @@ class PokemonTCGEnv(gym.Env):
             
         delta_my_hp = sum_hp(old_p0) - sum_hp(new_p0)
         if delta_my_hp > 0:
-            reward -= delta_my_hp * 0.005
+            reward -= delta_my_hp * 0.02
             
         delta_opp_hp = sum_hp(old_p1) - sum_hp(new_p1)
         if delta_opp_hp > 0:
-            reward += delta_opp_hp * 0.005
+            reward += delta_opp_hp * 0.03  # Dealing damage is heavily rewarded
             
         # Energy Attached
         def sum_energies(p):
@@ -155,16 +186,42 @@ class PokemonTCGEnv(gym.Env):
                 if b: e += len(b.energies)
             return e
             
-        delta_my_energy = sum_energies(new_p0) - sum_energies(old_p0)
-        if delta_my_energy > 0:
-            reward += delta_my_energy * 0.01
+        delta_total_energy = sum_energies(new_p0) - sum_energies(old_p0)
+        if delta_total_energy > 0:
+            active_attached = False
+            correct_energy_type = False
+            if old_p0.active and old_p0.active[0] and new_p0.active and new_p0.active[0]:
+                if _same_pokemon(old_p0.active[0], new_p0.active[0]):
+                    old_e_count = len(old_p0.active[0].energies)
+                    new_e_count = len(new_p0.active[0].energies)
+                    if new_e_count > old_e_count:
+                        active_attached = True
+                        old_e_list = [int(e) if not hasattr(e, 'value') else e.value for e in old_p0.active[0].energies]
+                        new_e_list = [int(e) if not hasattr(e, 'value') else e.value for e in new_p0.active[0].energies]
+                        for e in old_e_list:
+                            if e in new_e_list:
+                                new_e_list.remove(e)
+                        
+                        if len(new_e_list) > 0:
+                            added_e = new_e_list[0]
+                            # Deck 98 is a Grass deck, so required energy is GRASS (1) or COLORLESS (0)
+                            req_energies = [1, 0] 
+                            if added_e in req_energies:
+                                correct_energy_type = True
+
+            if active_attached and correct_energy_type:
+                reward += delta_total_energy * 0.25  # Big reward for correct energy on active
+            elif active_attached and not correct_energy_type:
+                reward -= delta_total_energy * 0.15  # Penalty for wrong energy
+            else:
+                reward += delta_total_energy * 0.05  # Small reward for bench energy
             
-        # Opponent Active KO
+        # Opponent Active KO (Big bonus for knocking out)
         old_opp_active = old_p1.active[0] if old_p1.active else None
         new_opp_active = new_p1.active[0] if new_p1.active else None
         if old_opp_active is not None and old_opp_active.hp > 0:
-            if new_opp_active is None or new_opp_active.id != old_opp_active.id or new_opp_active.hp <= 0:
-                reward += 0.05
+            if new_opp_active is None or not _same_pokemon(old_opp_active, new_opp_active) or new_opp_active.hp <= 0:
+                reward += 0.3  # KO Bonus
                 
         # Step Penalty (Time penalty)
         reward -= 0.001
@@ -196,34 +253,12 @@ class PokemonTCGEnv(gym.Env):
                 action, _ = self.opponent_model.predict(opponent_obs, deterministic=True)
                 action = int(action.item())
                 
-                valid_options = len(obs.select.option)
-                min_c = obs.select.minCount
-                max_c = obs.select.maxCount
-                
-                if max_c == 0:
-                    action_list = []
-                elif action >= valid_options:
-                    sample_size = min(valid_options, max_c)
-                    action_list = random.sample(list(range(valid_options)), sample_size)
-                else:
-                    action_list = [action]
-                    if len(action_list) < min_c:
-                        remaining = min_c - 1
-                        available = [i for i in range(valid_options) if i != action]
-                        if remaining <= len(available):
-                            action_list += random.sample(available, remaining)
-                    action_list = action_list[:max_c]
-                
-                action_list = [int(x) for x in action_list]
+                action_list = select_action_indices(obs, action, perspective=1)
                 self.current_obs_dict = battle_select(action_list)
                 
             else:
-                # Random selection for opponent
-                valid_options = len(obs.select.option)
-                max_c = obs.select.maxCount
-                sample_size = min(valid_options, max_c)
-                action_list = random.sample(list(range(valid_options)), sample_size)
-                action_list = [int(x) for x in action_list]
+                # Deterministic fallback for opponent turns.
+                action_list = select_action_indices(obs, 0, perspective=1)
                 self.current_obs_dict = battle_select(action_list)
             
         return done
@@ -238,6 +273,7 @@ class PokemonTCGEnv(gym.Env):
         vec = np.zeros((self.vector_dim,), dtype=np.float32)
         if obs.current is not None:
             state = obs.current
+            # Continuous & Boolean Stats (0-299)
             vec[0] = state.turn
             vec[1] = float(abs(state.yourIndex - perspective))
             vec[2] = state.firstPlayer
@@ -265,16 +301,161 @@ class PokemonTCGEnv(gym.Env):
                 if p.active and p.active[0] is not None:
                     vec[idx] = p.active[0].hp
                     vec[idx+1] = p.active[0].maxHp
-                    vec[idx+2] = len(p.active[0].energies)
-                idx += 3
+                    vec[idx+2] = float(p.active[0].appearThisTurn)
+                    for e in p.active[0].energies:
+                        e_idx = int(e) if not hasattr(e, 'value') else e.value
+                        if 0 <= e_idx < 12:
+                            vec[idx+3+e_idx] += 1.0
+                idx += 15
                 
                 # Bench
                 for i in range(5):
                     if i < len(p.bench) and p.bench[i] is not None:
-                        vec[idx + i*3] = p.bench[i].hp
-                        vec[idx + i*3 + 1] = p.bench[i].maxHp
-                        vec[idx + i*3 + 2] = len(p.bench[i].energies)
-                idx += 15
+                        vec[idx] = p.bench[i].hp
+                        vec[idx+1] = p.bench[i].maxHp
+                        vec[idx+2] = float(p.bench[i].appearThisTurn)
+                        for e in p.bench[i].energies:
+                            e_idx = int(e) if not hasattr(e, 'value') else e.value
+                            if 0 <= e_idx < 12:
+                                vec[idx+3+e_idx] += 1.0
+                    idx += 15
+
+            # Logs Continuous (256-275)
+            if obs.logs:
+                log_len = min(len(obs.logs), 5)
+                for i in range(log_len):
+                    log = obs.logs[-(i+1)]
+                    vec[256 + i*4] = float(log.playerIndex if log.playerIndex is not None else 0)
+                    vec[257 + i*4] = float(log.value if log.value is not None else 0)
+                    vec[258 + i*4] = float(log.head if log.head is not None else 0)
+                    vec[259 + i*4] = float(log.reason if log.reason is not None else 0)
+
+            # SelectData Context (250-255)
+            vec[255] = state.turnActionCount
+            if obs.select:
+                vec[250] = float(obs.select.context)
+                vec[251] = float(obs.select.minCount)
+                vec[252] = float(obs.select.maxCount)
+                vec[253] = float(obs.select.remainDamageCounter)
+                vec[254] = float(obs.select.remainEnergyCost)
+                
+                if obs.select.contextCard and obs.select.contextCard is not None:
+                    vec[409] = float(obs.select.contextCard.id)
+                if obs.select.effect and obs.select.effect is not None:
+                    vec[410] = float(obs.select.effect.id)
+
+            # Card IDs (300-410)
+            if state.stadium and state.stadium[0] is not None:
+                vec[330] = float(state.stadium[0].id)
+            
+            p_us = state.players[perspective]
+            p_them = state.players[1 - perspective]
+            
+            # Us Field
+            if p_us.active and p_us.active[0] is not None:
+                vec[300] = float(p_us.active[0].id)
+                if p_us.active[0].tools: vec[331] = float(p_us.active[0].tools[0].id)
+            for i in range(5):
+                if i < len(p_us.bench) and p_us.bench[i] is not None:
+                    vec[301 + i] = float(p_us.bench[i].id)
+                    if p_us.bench[i].tools: vec[332 + i] = float(p_us.bench[i].tools[0].id)
+            
+            # Them Field
+            if p_them.active and p_them.active[0] is not None:
+                vec[343] = float(p_them.active[0].id)
+                if p_them.active[0].tools: vec[337] = float(p_them.active[0].tools[0].id)
+            for i in range(5):
+                if i < len(p_them.bench) and p_them.bench[i] is not None:
+                    vec[344 + i] = float(p_them.bench[i].id)
+                    if p_them.bench[i].tools: vec[338 + i] = float(p_them.bench[i].tools[0].id)
+            
+            # Us Hand
+            if p_us.hand is not None:
+                for i in range(min(len(p_us.hand), 24)):
+                    vec[306 + i] = float(p_us.hand[i].id)
+                    
+            # Us Discard
+            if p_us.discard is not None:
+                disc = p_us.discard[-30:] if len(p_us.discard) > 30 else p_us.discard
+                for i in range(len(disc)):
+                    vec[349 + i] = float(disc[i].id)
+                    
+            # Them Discard
+            if p_them.discard is not None:
+                disc = p_them.discard[-30:] if len(p_them.discard) > 30 else p_them.discard
+                for i in range(len(disc)):
+                    vec[379 + i] = float(disc[i].id)
+
+            # Deck (411-470)
+            if obs.select and obs.select.deck is not None:
+                for i in range(min(len(obs.select.deck), 60)):
+                    vec[411 + i] = float(obs.select.deck[i].id)
+
+            # Looking (471-530)
+            if state.looking is not None:
+                for i in range(min(len(state.looking), 60)):
+                    if state.looking[i] is not None:
+                        vec[471 + i] = float(state.looking[i].id)
+
+            # Prize (531-542)
+            for i in range(min(len(p_us.prize), 6)):
+                if p_us.prize[i] is not None:
+                    vec[531 + i] = float(p_us.prize[i].id)
+            for i in range(min(len(p_them.prize), 6)):
+                if p_them.prize[i] is not None:
+                    vec[537 + i] = float(p_them.prize[i].id)
+
+            # Pre-Evolutions and Energy Cards (543-638)
+            def extract_pokemon_cards(p_state, pre_evo_base, nrg_base):
+                p_list = []
+                if p_state.active and p_state.active[0] is not None: p_list.append(p_state.active[0])
+                p_list.extend([x for x in p_state.bench if x is not None])
+                
+                e_idx = 0
+                pe_idx = 0
+                for pok in p_list:
+                    if hasattr(pok, 'preEvolution') and pok.preEvolution:
+                        for c in pok.preEvolution:
+                            if pe_idx < 18:
+                                vec[pre_evo_base + pe_idx] = float(c.id)
+                                pe_idx += 1
+                    if hasattr(pok, 'energyCards') and pok.energyCards:
+                        for c in pok.energyCards:
+                            if e_idx < 30:
+                                vec[nrg_base + e_idx] = float(c.id)
+                                e_idx += 1
+
+            extract_pokemon_cards(p_us, 543, 579)
+            extract_pokemon_cards(p_them, 561, 609)
+
+            # Log Cards (639-648) and Enums (1300-1314)
+            if obs.logs:
+                log_len = min(len(obs.logs), 5)
+                for i in range(log_len):
+                    log = obs.logs[-(i+1)]
+                    vec[639 + i*2] = float(log.cardId if log.cardId is not None else 0)
+                    vec[640 + i*2] = float(log.cardIdTarget if log.cardIdTarget is not None else 0)
+                    
+                    vec[1300 + i*3] = float(log.type if log.type is not None else 0)
+                    vec[1301 + i*3] = float(log.fromArea if log.fromArea is not None else 0)
+                    vec[1302 + i*3] = float(log.toArea if log.toArea is not None else 0)
+
+            # Options (800-1299)
+            if obs.select and obs.select.option:
+                opt_len = min(len(obs.select.option), 50)
+                for i in range(opt_len):
+                    opt = obs.select.option[i]
+                    base = 800 + i*10
+                    vec[base] = float(opt.type)
+                    vec[base+1] = float(opt.cardId if opt.cardId is not None else 0)
+                    vec[base+2] = float(opt.area if opt.area is not None else 0)
+                    vec[base+3] = float(opt.index if opt.index is not None else 0)
+                    vec[base+4] = float(opt.inPlayArea if opt.inPlayArea is not None else 0)
+                    vec[base+5] = float(opt.inPlayIndex if opt.inPlayIndex is not None else 0)
+                    vec[base+6] = float(opt.attackId if opt.attackId is not None else 0)
+                    vec[base+7] = float(opt.specialConditionType if opt.specialConditionType is not None else 0)
+                    vec[base+8] = float(opt.playerIndex if opt.playerIndex is not None else 0)
+                    vec[base+9] = float(opt.number if opt.number is not None else (opt.count if hasattr(opt, 'count') and opt.count is not None else 0))
                 
         # Auxiliary Target: Predict the hidden cards of the opponent
         hidden_counts = {}

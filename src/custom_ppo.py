@@ -6,6 +6,7 @@ import gymnasium as gym
 
 from sb3_contrib.ppo_recurrent.ppo_recurrent import RecurrentPPO
 from sb3_contrib.ppo_recurrent.policies import RecurrentMultiInputActorCriticPolicy
+from sb3_contrib.common.recurrent.type_aliases import RNNStates
 from stable_baselines3.common.utils import explained_variance
 
 class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
@@ -24,6 +25,73 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         # Add aux head parameters to the existing optimizer
         self.optimizer.add_param_group({'params': self.aux_head.parameters()})
 
+    def forward(
+        self,
+        obs: torch.Tensor,
+        lstm_states: RNNStates,
+        episode_starts: torch.Tensor,
+        deterministic: bool = False,
+    ):
+        """
+        Forward pass in all the networks (actor and critic) with Action Masking.
+        """
+        features = self.extract_features(obs)
+        if self.share_features_extractor:
+            pi_features = vf_features = features  # alias
+        else:
+            pi_features, vf_features = features
+            
+        latent_pi, lstm_states_pi = self._process_sequence(pi_features, lstm_states.pi, episode_starts, self.lstm_actor)
+        if self.lstm_critic is not None:
+            latent_vf, lstm_states_vf = self._process_sequence(vf_features, lstm_states.vf, episode_starts, self.lstm_critic)
+        elif self.shared_lstm:
+            # Re-use LSTM features but do not backpropagate
+            latent_vf = latent_pi.detach()
+            lstm_states_vf = (lstm_states_pi[0].detach(), lstm_states_pi[1].detach())
+        else:
+            # Critic only has a feedforward network
+            latent_vf = self.critic(vf_features)
+            lstm_states_vf = lstm_states_pi
+
+        latent_pi = self.mlp_extractor.forward_actor(latent_pi)
+        latent_vf = self.mlp_extractor.forward_critic(latent_vf)
+
+        # Evaluate the values for the given observations
+        values = self.value_net(latent_vf)
+        
+        # APPLY ACTION MASKING HERE
+        mean_actions = self.action_net(latent_pi)
+        if isinstance(obs, dict) and 'action_mask' in obs:
+            mask = obs['action_mask']
+            mean_actions = mean_actions + (1.0 - mask) * -1e8
+            
+        distribution = self.action_dist.proba_distribution(action_logits=mean_actions)
+        actions = distribution.get_actions(deterministic=deterministic)
+        log_prob = distribution.log_prob(actions)
+        actions = actions.reshape((-1, *self.action_space.shape))
+        return actions, values, log_prob, RNNStates(lstm_states_pi, lstm_states_vf)
+
+    def get_distribution(
+        self,
+        obs,
+        lstm_states,
+        episode_starts,
+    ):
+        """
+        Get the current policy distribution given the observations.
+        """
+        features = self.extract_features(obs)
+        latent_pi, lstm_states_pi = self._process_sequence(features, lstm_states, episode_starts, self.lstm_actor)
+        latent_pi_mlp = self.mlp_extractor.forward_actor(latent_pi)
+        
+        mean_actions = self.action_net(latent_pi_mlp)
+        
+        if isinstance(obs, dict) and 'action_mask' in obs:
+            mask = obs['action_mask']
+            mean_actions = mean_actions + (1.0 - mask) * -1e8
+            
+        return self.action_dist.proba_distribution(action_logits=mean_actions), lstm_states_pi
+
     def evaluate_actions_with_aux(self, obs, actions, lstm_states, episode_starts):
         """
         Evaluate actions and also return auxiliary logits.
@@ -39,7 +107,13 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         latent_pi_mlp = self.mlp_extractor.forward_actor(latent_pi)
         latent_vf_mlp = self.mlp_extractor.forward_critic(latent_vf)
         
-        distribution = self._get_action_dist_from_latent(latent_pi_mlp)
+        mean_actions = self.action_net(latent_pi_mlp)
+        
+        if isinstance(obs, dict) and 'action_mask' in obs:
+            mask = obs['action_mask']
+            mean_actions = mean_actions + (1.0 - mask) * -1e8
+            
+        distribution = self.action_dist.proba_distribution(action_logits=mean_actions)
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf_mlp)
         entropy = distribution.entropy()

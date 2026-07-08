@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pokémon TCG AI Evolution</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="dashboard.css">
+    <style>
+        .tabs {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 2px solid rgba(255,255,255,0.1);
+            padding-bottom: 1px;
+        }
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.2rem;
+            font-weight: 600;
+            font-family: inherit;
+            padding: 0.75rem 1.5rem;
+            cursor: pointer;
+            position: relative;
+            transition: all 0.2s ease;
+        }
+        .tab-btn:hover {
+            color: var(--text-main);
+        }
+        .tab-btn.active {
+            color: var(--accent-1);
+        }
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: -3px;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: var(--accent-1);
+            border-radius: 3px 3px 0 0;
+        }
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <div class="background-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+    </div>
+    
+    <div class="container">
+        <header>
+            <h1>AI Tournament <span>Dashboard</span></h1>
+            <p>Live Leaderboard & Matchup Analysis</p>
+        </header>
+
+        <main>
+            <div class="tabs">
+                <button class="tab-btn active" onclick="openTab('training-tab', this)">🧠 Training</button>
+                <button class="tab-btn" onclick="openTab('arena-tab', this)">🏆 Elo Arena</button>
+            </div>
+
+            <div id="training-tab" class="tab-content active">
+            <section class="card config-card" style="margin-bottom: 2rem;">
+                <h2>⚙️ Custom Training Configuration</h2>
+                <form id="training-form" style="display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem;">
+                    <div style="display: flex; gap: 1rem;">
+                        <div style="flex: 1;">
+                            <label style="display: block; color: var(--text-muted); margin-bottom: 0.5rem;">Learning Deck</label>
+                            <select id="train-learning-deck" style="width: 100%; padding: 0.5rem; background: var(--bg-card); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;"></select>
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="display: block; color: var(--text-muted); margin-bottom: 0.5rem;">Mode</label>
+                            <select id="train-mode" style="width: 100%; padding: 0.5rem; background: var(--bg-card); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;" onchange="document.getElementById('opp-deck-container').style.display = this.value === 'vs_bot' ? 'block' : 'none'">
+                                <option value="self_play">Self-Play (Static Snapshot)</option>
+                                <option value="vs_bot">Train vs Bot B</option>
+                            </select>
+                        </div>
+                        <div id="opp-deck-container" style="flex: 1; display: none;">
+                            <label style="display: block; color: var(--text-muted); margin-bottom: 0.5rem;">Opponent Deck</label>
+                            <select id="train-opponent-deck" style="width: 100%; padding: 0.5rem; background: var(--bg-card); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;"></select>
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="display: block; color: var(--text-muted); margin-bottom: 0.5rem;">Timesteps</label>
+                            <input type="number" id="train-timesteps" value="500000" style="width: 100%; padding: 0.5rem; background: var(--bg-card); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="display: block; color: var(--text-muted); margin-bottom: 0.5rem;">Model Title (optional)</label>
+                            <input type="text" id="train-model-title" placeholder="my_custom_model" style="width: 100%; padding: 0.5rem; background: var(--bg-card); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="display: block; color: var(--text-muted); margin-bottom: 0.5rem;">Algorithm</label>
+                            <select id="train-algo" style="width: 100%; padding: 0.5rem; background: var(--bg-card); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+                                <option value="PPO">PPO (Fast)</option>
+                                <option value="RecurrentPPO">Recurrent PPO (Memory)</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; gap: 1rem;">
+                        <div style="flex: 1;">
+                            <label style="display: block; color: var(--text-muted); margin-bottom: 0.5rem;">Start Creativity (Ent Coef)</label>
+                            <input type="number" step="0.001" id="train-ent-start" value="0.1" style="width: 100%; padding: 0.5rem; background: var(--bg-card); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+                        </div>
+                        <div style="flex: 1;">
+                            <label style="display: block; color: var(--text-muted); margin-bottom: 0.5rem;">End Creativity (Ent Coef)</label>
+                            <input type="number" step="0.001" id="train-ent-end" value="0.01" style="width: 100%; padding: 0.5rem; background: var(--bg-card); color: var(--text-main); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px;">
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 1.5rem; display: flex; gap: 1rem;">
+                        <button type="button" onclick="startCustomTraining()" style="flex: 2; padding: 0.75rem; background: linear-gradient(135deg, #3b82f6, #8b5cf6); color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer;">
+                            🚀 Start Custom Training
+                        </button>
+                        <button type="button" onclick="cancelCustomTraining()" style="flex: 1; padding: 0.75rem; background: var(--bg-card); color: #f87171; border: 1px solid #f87171; border-radius: 6px; font-weight: bold; cursor: pointer;">
+                            🛑 Abbrechen
+                        </button>
+                    </div>
+
+                    <div id="training-progress-container" style="display: none; margin-top: 1.5rem; background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 6px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 0.5rem;">
+                            <span id="training-progress-text" style="color: var(--text-main); font-weight: bold;">Starting...</span>
+                            <span id="training-progress-percent" style="color: var(--text-muted);">0%</span>
+                        </div>
+                        <div style="width: 100%; background: rgba(255,255,255,0.1); border-radius: 4px; height: 12px; overflow: hidden;">
+                            <div id="training-progress-fill" style="width: 0%; height: 100%; background: linear-gradient(90deg, #10b981, #3b82f6); transition: width 0.5s ease;"></div>
+                        </div>
+                    </div>
+                    
+                    <div id="train-custom-status" style="margin-top: 1rem; font-weight: bold;"></div>
+
+                    <h3 style="margin-top: 1rem; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 0.5rem;">Reward Config (Defaults)</h3>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;">
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Prize Win</label><input type="number" step="0.1" id="rew-PRIZE_WIN" value="10.0" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Deck-Out Win</label><input type="number" step="0.1" id="rew-DECK_OUT_WIN" value="2.0" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Loss</label><input type="number" step="0.1" id="rew-LOSS" value="-2.0" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Deck-Out Penalty</label><input type="number" step="0.1" id="rew-DECK_OUT_PENALTY" value="-3.0" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Prize Taken</label><input type="number" step="0.1" id="rew-PRIZE_TAKEN" value="0.5" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Prize Lost</label><input type="number" step="0.1" id="rew-PRIZE_LOST" value="-0.5" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Deck Shrink</label><input type="number" step="0.001" id="rew-DECK_SHRINK" value="0.005" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Damage Taken</label><input type="number" step="0.001" id="rew-DAMAGE_TAKEN" value="-0.005" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Damage Dealt</label><input type="number" step="0.001" id="rew-DAMAGE_DEALT" value="0.005" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Energy Attached</label><input type="number" step="0.01" id="rew-ENERGY_ATTACHED" value="0.05" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Opponent KO</label><input type="number" step="0.1" id="rew-OPPONENT_KO" value="0.5" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                        <div><label style="font-size: 0.8em; color: var(--text-muted);">Time Penalty</label><input type="number" step="0.001" id="rew-TIME_PENALTY" value="-0.001" style="width:100%; background:var(--bg-card); color:#fff; border:1px solid rgba(255,255,255,0.2);"></div>
+                    </div>
+                </form>
+            </section>
+
+            <section class="card roster-card">
+            </div>
+
+            <div id="arena-tab" class="tab-content">
+            <section class="card status-card" style="border-left: 4px solid var(--accent-1); display: flex; align-items: center; justify-content: center; margin-bottom: 2rem;">
+                <div class="control-panel">
+                    <button id="btn-start" class="btn btn-primary">▶️ Start</button>
+                    <button id="btn-pause" class="btn btn-secondary">⏸️ Pause</button>
+                    <button id="btn-reset" class="btn btn-danger">🛑 Factory Reset</button>
+                </div>
+            </section>
+            <section class="card leaderboard-card">
+                <h2>🏆 Global Leaderboard</h2>
+                <div class="table-container">
+                    <table id="leaderboard-table">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Deck Name</th>
+                                <th>Elo Rating</th>
+                                <th>Win Rate</th>
+                                <th>Matches Played</th>
+                                <th>Win Details (Aktuelle Gen)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="leaderboard-body">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="card stats-card" style="margin-top: 2rem;">
+                <h2>📊 Win Conditions (Aktuelle Generation)</h2>
+                <div style="display: flex; gap: 2rem; margin-top: 1.5rem; align-items: center; justify-content: space-around;">
+                    <div style="text-align: center; flex: 1;">
+                        <h3 style="font-size: 2.2rem; color: #10b981; margin: 0;" id="stat-prize-wins">0</h3>
+                        <p style="color: var(--text-muted); margin-top: 0.5rem; font-weight: 600;">Prize Cards 🏆</p>
+                    </div>
+                    
+                    <div style="text-align: center; flex: 1;">
+                        <h3 style="font-size: 2.2rem; color: #38bdf8; margin: 0;" id="stat-bench-wins">0</h3>
+                        <p style="color: var(--text-muted); margin-top: 0.5rem; font-weight: 600;">Bench-Out 🪑</p>
+                    </div>
+
+                    <div style="text-align: center; flex: 1;">
+                        <h3 style="font-size: 2.2rem; color: #f43f5e; margin: 0;" id="stat-deckout-wins">0</h3>
+                        <p style="color: var(--text-muted); margin-top: 0.5rem; font-weight: 600;">Deck-Out 🚫</p>
+                    </div>
+                </div>
+                
+                <div style="margin: 1.5rem auto 0; max-width: 600px; height: 12px; background: rgba(255,255,255,0.05); border-radius: 6px; overflow: hidden; display: flex;">
+                    <div id="stat-bar-prize" style="height: 100%; width: 33.3%; background: #10b981; transition: width 0.5s;"></div>
+                    <div id="stat-bar-bench" style="height: 100%; width: 33.3%; background: #38bdf8; transition: width 0.5s;"></div>
+                    <div id="stat-bar-deckout" style="height: 100%; width: 33.3%; background: #f43f5e; transition: width 0.5s;"></div>
+                </div>
+            </section>
+
+            <section class="card heatmap-card">
+                <h2>⚔️ Pairwise Matchups (Aktuelle Generation)</h2>
+                <p class="subtitle">Lesezeile: "Deck A's Siege : Deck B's Siege" in der tagesaktuellen Runde (z.B. 4:1)</p>
+                <div class="heatmap-container" id="heatmap-container">
+                    <!-- Populated by JS -->
+                </div>
+            </section>
+            </div>
+        </main>
+    </div>
+
+    <div id="custom-tooltip"></div>
+    <script>
+        function openTab(tabId, btn) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            btn.classList.add('active');
+        }
+    </script>
+    <script src="dashboard.js"></script>
+</body>
+</html>

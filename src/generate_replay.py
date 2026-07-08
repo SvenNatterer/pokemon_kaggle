@@ -25,9 +25,19 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
     
     env = PokemonTCGEnv(my_deck=deck_a, opponent_deck=deck_b, opponent_model_path=model_b_path)
     
+    from src.custom_ppo import CustomPPO
+    def load_model_smart(path, env=None):
+        try:
+            return CustomPPO.load(path, env=env)
+        except Exception as e:
+            if env:
+                return PPO.load(path, env=env)
+            return PPO.load(path)
+            
     model = None
     if model_a_path and os.path.exists(model_a_path):
-        model = PPO.load(model_a_path, env=env)
+        print(f"Loading {model_a_path}...")
+        model = load_model_smart(model_a_path, env=env)
         print("Model loaded successfully.")
     else:
         print("Model not found! Generating replay using random actions instead.")

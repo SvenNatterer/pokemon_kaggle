@@ -31,7 +31,16 @@ def simulate_match(model1_path, deck1_path, model2_path, deck2_path, num_games=1
 def evaluate_vs_baseline(model_path, deck_path, num_games=10):
     deck = read_deck(deck_path)
     env = PokemonTCGEnv(deck, deck)
-    model = CustomPPO.load(model_path, env=env)
+    from stable_baselines3 import PPO
+    def load_model_smart(path, env=None):
+        try:
+            return CustomPPO.load(path, env=env)
+        except Exception as e:
+            if env:
+                return PPO.load(path, env=env)
+            return PPO.load(path)
+            
+    model = load_model_smart(model_path, env=env)
     
     wins = 0
     for i in range(num_games):
@@ -51,10 +60,19 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
     deck1 = read_deck(deck1_path)
     deck2 = read_deck(deck2_path)
     
-    model2 = CustomPPO.load(model2_path)
+    from stable_baselines3 import PPO
+    def load_model_smart(path, env=None):
+        try:
+            return CustomPPO.load(path, env=env)
+        except Exception as e:
+            if env:
+                return PPO.load(path, env=env)
+            return PPO.load(path)
+
+    model2 = load_model_smart(model2_path)
     
     env = PokemonTCGEnv(my_deck=deck1, opponent_deck=deck2, opponent_model_path=model2_path)
-    model1 = CustomPPO.load(model1_path, env=env)
+    model1 = load_model_smart(model1_path, env=env)
     
     wins = 0
     losses = 0
@@ -62,8 +80,10 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
     
     prize_wins_1 = 0
     deckout_wins_1 = 0
+    benchout_wins_1 = 0
     prize_wins_2 = 0
     deckout_wins_2 = 0
+    benchout_wins_2 = 0
     
     for i in range(num_games):
         obs, info = env.reset()
@@ -81,14 +101,16 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
             wins += 1
             if reason == 'prize': prize_wins_1 += 1
             elif reason == 'deckout': deckout_wins_1 += 1
+            elif reason == 'benchout': benchout_wins_1 += 1
         elif reward < 0:
             losses += 1
             if reason == 'prize': prize_wins_2 += 1
             elif reason == 'deckout': deckout_wins_2 += 1
+            elif reason == 'benchout': benchout_wins_2 += 1
         else:
             draws += 1
             
-    return wins, losses, draws, prize_wins_1, deckout_wins_1, prize_wins_2, deckout_wins_2
+    return wins, losses, draws, prize_wins_1, deckout_wins_1, benchout_wins_1, prize_wins_2, deckout_wins_2, benchout_wins_2
 
 def main():
     decks = [f"decks/deck_{i}.csv" for i in range(1, 9)]

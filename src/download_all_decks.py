@@ -7,7 +7,7 @@ import ssl
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 try:
     from src.cg.api import all_card_data
-    from src.auto_tourney import MASTER_URLS
+    from src.arena_utils import MASTER_URLS
 except ImportError:
     print("Could not import required modules.")
     sys.exit(1)

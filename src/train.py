@@ -10,7 +10,8 @@ from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback,
 from stable_baselines3.common.vec_env import SubprocVecEnv
 import json
 import os
-os.environ["WANDB_MODE"] = "offline"
+if "WANDB_MODE" not in os.environ:
+    os.environ["WANDB_MODE"] = "online"
 import wandb
 from wandb.integration.sb3 import WandbCallback
 
@@ -75,17 +76,26 @@ def train():
         model = CustomPPO.load(model_path, env=env)
     else:
         print("Creating new Custom PPO model...")
+        
+        from src.custom_policy import PokemonTCGFeatureExtractor
+        policy_kwargs = dict(
+            features_extractor_class=PokemonTCGFeatureExtractor,
+        )
+        
         model = CustomPPO(
             PokemonTCGRecurrentPolicy, 
             env, 
             verbose=1, 
             learning_rate=3e-4,
-            n_steps=1024,
-            batch_size=1024, # MAXIMUM SPEED
-            n_epochs=3,
+            n_steps=2048,
+            batch_size=512,
+            n_epochs=5,
+            gamma=0.999,
+            ent_coef=0.02,
             c_aux=0.5,
             device="cpu",
-            tensorboard_log="logs/"
+            tensorboard_log="logs/",
+            policy_kwargs=policy_kwargs
         )
     
     print(f"Starting training for {args.timesteps} timesteps...")
@@ -104,11 +114,13 @@ def train():
         
     action_text = f"🧠 Training: {deck_name} (D{deck_id}) vs {opp_name} (D{opp_id})"
     
+    run_name = os.environ.get("WANDB_NAME", f"D{deck_id}_vs_D{opp_id}_{args.timesteps}")
+    
     # Initialize wandb
     run = wandb.init(
         project="pokemon_kaggle",
-        name=f"D{deck_id}_vs_D{opp_id}_{args.timesteps}",
-        group=f"deck_{deck_id}",
+        name=run_name,
+        group=os.environ.get("WANDB_RUN_GROUP", f"deck_{deck_id}"),
         config=vars(args),
         sync_tensorboard=True, # auto-upload sb3's tensorboard metrics
         monitor_gym=True,
@@ -123,7 +135,7 @@ def train():
     )
     callbacks = CallbackList([live_status_callback, wandb_callback])
     
-    model.learn(total_timesteps=args.timesteps, callback=callbacks)
+    model.learn(total_timesteps=args.timesteps, callback=callbacks, tb_log_name=f"Deck_{deck_id}")
     
     run.finish()
     
