@@ -2,8 +2,8 @@ import sys
 import os
 import pandas as pd
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'pokemon-tcg-ai-battle/sample_submission/sample_submission')))
-from cg.game import battle_start, battle_select
-from cg.api import to_observation_class
+from src.cg.game import battle_start, battle_select
+from src.cg.api import to_observation_class
 
 df = pd.read_csv("decks/deck_23.csv", header=None)
 deck = df[0].tolist()

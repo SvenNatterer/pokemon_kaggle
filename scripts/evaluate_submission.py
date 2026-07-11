@@ -19,6 +19,7 @@ os.chdir(ROOT)
 sys.path.insert(0, ROOT)
 
 from src.model_paths import discover_deck_models, parse_deck_model_path
+from src.arena_core import atomic_write_json, read_json, utc_now
 
 
 DEFAULT_HOLDOUT_FILE = "decks/holdout_opponents.json"
@@ -34,6 +35,16 @@ def deck_path_for_id(deck_id: str) -> str:
 
 def normalize_path(path: str) -> str:
     return os.path.relpath(path, ROOT) if os.path.isabs(path) else path
+
+
+def candidate_suggestions(model_path: str) -> list[str]:
+    base_name = os.path.splitext(os.path.basename(model_path))[0]
+    suggestions = []
+    for model in discover_deck_models("models", include_variants=True):
+        name = model["name"]
+        if base_name in name or name in base_name:
+            suggestions.append(model["path"])
+    return suggestions[:5]
 
 
 def entry_from_model(model: dict[str, Any]) -> dict[str, str] | None:
@@ -56,6 +67,11 @@ def entry_from_path(model_path: str) -> dict[str, str] | None:
     if parsed is None:
         raise ValueError(f"Cannot parse deck id from model path: {model_path}")
     if not os.path.exists(model_path):
+        suggestions = candidate_suggestions(model_path)
+        if suggestions:
+            raise FileNotFoundError(
+                f"Model not found: {model_path}. Similar models: {', '.join(suggestions)}"
+            )
         raise FileNotFoundError(f"Model not found: {model_path}")
     return entry_from_model(parsed)
 
@@ -114,18 +130,6 @@ def discover_candidates(args: argparse.Namespace) -> list[dict[str, str]]:
             entry = entry_from_path(path)
             if entry is not None:
                 candidates.append(entry)
-            
-            base_path = path
-            if base_path.endswith(".zip"):
-                base_path = base_path[:-4]
-            import glob
-            for ckpt_path in glob.glob(f"{base_path}_checkpoint_*.zip"):
-                try:
-                    ckpt_entry = entry_from_path(ckpt_path)
-                    if ckpt_entry is not None:
-                        candidates.append(ckpt_entry)
-                except Exception as e:
-                    print(f"Warning: could not load checkpoint {ckpt_path}: {e}")
         return candidates
     return discover_entries(args.candidate_pool, include_variants=args.include_variants)
 
@@ -281,6 +285,7 @@ def main() -> int:
     parser.add_argument("--init", action="store_true", help="Create or refresh the holdout file and exit.")
     parser.add_argument("--list", action="store_true", help="Print candidates and opponents without evaluating.")
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument("--progress-file", default="", help="Optional JSON progress file for the arena dashboard.")
     parser.set_defaults(include_variants=True)
     args = parser.parse_args()
 
@@ -330,6 +335,21 @@ def main() -> int:
             )
             if row["error"]:
                 print(f"error: {row['error']}")
+            if args.progress_file:
+                completed_games = sum(item["games"] for item in rows)
+                atomic_write_json(args.progress_file, {
+                    "state": "running", "bot_id": read_json(args.progress_file, {}).get("bot_id", candidate["label"]),
+                    "model_path": candidate["model_path"],
+                    "opponents": [entry["label"] for entry in opponents], "games_per_opponent": args.games,
+                    "planned_games": total_pairs * args.games, "completed_games": completed_games,
+                    "wins": sum(item["wins"] for item in rows), "losses": sum(item["losses"] for item in rows),
+                    "draws": sum(item["draws"] for item in rows),
+                    "progress": completed_games / (total_pairs * args.games) if total_pairs else 0.0,
+                    "started_at": read_json(args.progress_file, {}).get("started_at", utc_now()),
+                    "ended_at": None, "result_at": None, "error": "",
+                    "result_file": args.results_file,
+                    "configuration": {"holdout_file": args.holdout_file, "games": args.games},
+                })
 
     summaries = aggregate(rows)
     print_summary(summaries)
@@ -342,9 +362,7 @@ def main() -> int:
             "summary": summaries,
             "matches": rows,
         }
-        os.makedirs(os.path.dirname(args.results_file), exist_ok=True)
-        with open(args.results_file, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+        atomic_write_json(args.results_file, payload)
         print(f"\nSaved results to {args.results_file}")
 
     return 0

@@ -8,7 +8,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.env_wrapper import PokemonTCGEnv, _fit_observation_to_model_space
 from src.custom_ppo import CustomPPO
-from src.model_paths import discover_deck_models, resolve_deck_model_path
+from src.model_paths import discover_deck_models, resolve_deck_model_path, strip_zip_suffix
+from src.bot_loader import load_bot
 
 def read_deck(deck_path):
     df = pd.read_csv(deck_path, header=None)
@@ -33,22 +34,7 @@ def simulate_match(model1_path, deck1_path, model2_path, deck2_path, num_games=1
 def evaluate_vs_baseline(model_path, deck_path, num_games=10):
     deck = read_deck(deck_path)
     env = PokemonTCGEnv(deck, deck)
-    from stable_baselines3 import PPO
-    def load_model_smart(path, env=None):
-        try:
-            return CustomPPO.load(path, env=env)
-        except Exception as e:
-            if env:
-                try:
-                    return PPO.load(path, env=env)
-                except Exception:
-                    pass
-            try:
-                return CustomPPO.load(path)
-            except Exception:
-                return PPO.load(path)
-            
-    model = load_model_smart(model_path, env=env)
+    model = load_bot(model_path, env=env)
     
     wins = 0
     for i in range(num_games):
@@ -77,25 +63,10 @@ def evaluate_vs_baseline(model_path, deck_path, num_games=10):
             
     return wins
 
-def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_games=10):
+def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_games=10, return_details=False):
     deck1 = read_deck(deck1_path)
     deck2 = read_deck(deck2_path)
     
-    from stable_baselines3 import PPO
-    def load_model_smart(path, env=None):
-        try:
-            return CustomPPO.load(path, env=env)
-        except Exception as e:
-            if env:
-                try:
-                    return PPO.load(path, env=env)
-                except Exception:
-                    pass
-            try:
-                return CustomPPO.load(path)
-            except Exception:
-                return PPO.load(path)
-
     wins = 0
     losses = 0
     draws = 0
@@ -106,6 +77,8 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
     prize_wins_2 = 0
     deckout_wins_2 = 0
     benchout_wins_2 = 0
+    total_turns = 0
+    reason_counts = {}
     
     def run_direction(
         learner_model_path,
@@ -118,6 +91,7 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
         nonlocal wins, losses, draws
         nonlocal prize_wins_1, deckout_wins_1, benchout_wins_1
         nonlocal prize_wins_2, deckout_wins_2, benchout_wins_2
+        nonlocal total_turns
 
         if learner_perspective == 0:
             env = PokemonTCGEnv(
@@ -134,7 +108,7 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
                 learner_perspective=1,
             )
             
-        learner_model = load_model_smart(learner_model_path, env=env)
+        learner_model = load_bot(learner_model_path, env=env)
         model_space = getattr(learner_model, "observation_space", None)
 
         try:
@@ -143,6 +117,7 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
                 done = False
                 lstm_state = None
                 episode_start = np.ones((1,), dtype=bool)
+                turns = 0
                 while not done:
                     obs_for_model = (
                         _fit_observation_to_model_space(obs, model_space)
@@ -156,10 +131,14 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
                     )
                     episode_start = np.zeros((1,), dtype=bool)
                     obs, _, terminated, truncated, info = env.step(action)
+                    turns += 1
                     done = terminated or truncated
+
+                total_turns += turns
 
                 engine_winner = info.get("winner", -1)
                 reason = info.get("win_reason", "other")
+                reason_counts[reason] = reason_counts.get(reason, 0) + 1
                 candidate_won = (engine_winner == learner_perspective)
                 reference_won = (engine_winner == 1 - learner_perspective)
 
@@ -199,7 +178,10 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
             learner_perspective=1,
         )
             
-    return wins, losses, draws, prize_wins_1, deckout_wins_1, benchout_wins_1, prize_wins_2, deckout_wins_2, benchout_wins_2
+    result = (wins, losses, draws, prize_wins_1, deckout_wins_1, benchout_wins_1, prize_wins_2, deckout_wins_2, benchout_wins_2)
+    if return_details:
+        return result, {"total_turns": total_turns, "reason_counts": reason_counts}
+    return result
 
 
 def discover_tournament_entries():

@@ -40,9 +40,6 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
             self.action_net = nn.Linear(old_action_net.in_features + self.belief_dim, old_action_net.out_features)
             nn.init.orthogonal_(self.action_net.weight, gain=0.01)
             nn.init.constant_(self.action_net.bias, 0.0)
-
-            initial_lr = self.optimizer.param_groups[0]["lr"]
-            self.optimizer = self.optimizer_class(self.parameters(), lr=initial_lr, **self.optimizer_kwargs)
         else:
             # Legacy architecture: keep parameter names/shapes compatible with existing checkpoints.
             self.aux_head = nn.Sequential(
@@ -50,7 +47,28 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
                 nn.ReLU(),
                 nn.Linear(256, 2000), # aux_dim = 2000
             )
-            self.optimizer.add_param_group({'params': self.aux_head.parameters()})
+
+        self.structured_options = bool(
+            getattr(self.features_extractor, "structured_v2", False)
+            and hasattr(self.features_extractor, "encode_options")
+        )
+        if self.structured_options:
+            option_dim = int(getattr(self.features_extractor, "option_encoder")[-2].out_features)
+            self.option_scorer = nn.Sequential(
+                nn.Linear(self.action_net.in_features + option_dim, 128),
+                nn.ReLU(),
+                nn.Linear(128, 1),
+            )
+
+        if self.use_belief_actor:
+            # The actor input dimension changed; rebuild once after all V2 heads exist.
+            initial_lr = self.optimizer.param_groups[0]["lr"]
+            self.optimizer = self.optimizer_class(self.parameters(), lr=initial_lr, **self.optimizer_kwargs)
+        else:
+            new_parameters = list(self.aux_head.parameters())
+            if self.structured_options:
+                new_parameters.extend(self.option_scorer.parameters())
+            self.optimizer.add_param_group({'params': new_parameters})
 
     def _actor_latent_with_belief(self, latent_memory, latent_pi_mlp):
         if not self.use_belief_actor:
@@ -59,6 +77,26 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         belief_embedding = self.belief_encoder(latent_memory)
         actor_belief = belief_embedding.detach() if self.detach_belief_actor else belief_embedding
         return torch.cat([latent_pi_mlp, actor_belief], dim=-1), belief_embedding
+
+    def _action_logits(self, obs, actor_latent):
+        """Score encoded legal options with shared weights, then apply legality."""
+        logits = self.action_net(actor_latent)
+        if self.structured_options:
+            option_embeddings = self.features_extractor.encode_options(obs)
+            option_count = option_embeddings.shape[-2]
+            expanded_state = actor_latent.unsqueeze(-2).expand(
+                *actor_latent.shape[:-1], option_count, actor_latent.shape[-1]
+            )
+            option_scores = self.option_scorer(
+                torch.cat([expanded_state, option_embeddings], dim=-1)
+            ).squeeze(-1)
+            logits = logits.clone()
+            logits[..., :option_count] = option_scores
+
+        if isinstance(obs, dict) and 'action_mask' in obs:
+            mask = obs['action_mask']
+            logits = logits + (1.0 - mask) * -1e8
+        return logits
 
     def forward(
         self,
@@ -97,10 +135,7 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         values = self.value_net(latent_vf)
         
         # APPLY ACTION MASKING HERE
-        mean_actions = self.action_net(latent_pi)
-        if isinstance(obs, dict) and 'action_mask' in obs:
-            mask = obs['action_mask']
-            mean_actions = mean_actions + (1.0 - mask) * -1e8
+        mean_actions = self._action_logits(obs, latent_pi)
             
         distribution = self.action_dist.proba_distribution(action_logits=mean_actions)
         actions = distribution.get_actions(deterministic=deterministic)
@@ -122,11 +157,7 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         latent_pi_mlp = self.mlp_extractor.forward_actor(latent_pi)
         latent_pi_mlp, _ = self._actor_latent_with_belief(latent_pi, latent_pi_mlp)
         
-        mean_actions = self.action_net(latent_pi_mlp)
-        
-        if isinstance(obs, dict) and 'action_mask' in obs:
-            mask = obs['action_mask']
-            mean_actions = mean_actions + (1.0 - mask) * -1e8
+        mean_actions = self._action_logits(obs, latent_pi_mlp)
             
         return self.action_dist.proba_distribution(action_logits=mean_actions), lstm_states_pi
 
@@ -146,11 +177,7 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         latent_vf_mlp = self.mlp_extractor.forward_critic(latent_vf)
         latent_pi_mlp, belief_embedding = self._actor_latent_with_belief(latent_pi, latent_pi_mlp)
         
-        mean_actions = self.action_net(latent_pi_mlp)
-        
-        if isinstance(obs, dict) and 'action_mask' in obs:
-            mask = obs['action_mask']
-            mean_actions = mean_actions + (1.0 - mask) * -1e8
+        mean_actions = self._action_logits(obs, latent_pi_mlp)
             
         distribution = self.action_dist.proba_distribution(action_logits=mean_actions)
         log_prob = distribution.log_prob(actions)

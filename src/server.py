@@ -1,45 +1,34 @@
 import os
-import subprocess
-import signal
 import json
 import sys
+import shutil
+import subprocess
+import time
 from urllib.parse import quote
 from flask import Flask, jsonify, redirect, send_from_directory, request
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(BASE_DIR)
 
+from src.arena_control import ArenaController
+from src.arena_core import ArenaStore, EVALUATION_FILE, atomic_write_json, discover_participants, rank_participants, read_json, utc_now
+from src.arena_match import load_holdout_results
 from src.model_paths import resolve_deck_model_base, resolve_deck_model_path
 
 app = Flask(__name__, static_folder=BASE_DIR)
 
-arena_process = None
 train_process = None
+evaluation_process = None
+arena_store = ArenaStore()
+arena_controller = ArenaController(arena_store)
 
-def is_running():
-    global arena_process, train_process
-    if arena_process is None and train_process is None:
-        return False
-    if arena_process is not None and arena_process.poll() is None:
-        return True
-    if train_process is not None and train_process.poll() is None:
-        return True
-    return False
-
-def kill_tourney():
-    global arena_process
-    if arena_process is not None and arena_process.poll() is None:
-        arena_process.terminate()
-        try:
-            arena_process.wait(timeout=5)
-        except:
-            arena_process.kill()
-    
-    arena_process = None
-    
-    # Also aggressively kill any lingering evaluate.py or arena processes
-    subprocess.run("pkill -f 'python src/evaluate_single.py'", shell=True)
-    subprocess.run("pkill -f 'python src/auto_arena.py'", shell=True)
+@app.after_request
+def add_cors_headers(response):
+    # Allow the static dashboard on port 8080 to talk to this API on 8050.
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
 
 @app.route("/")
 def index():
@@ -51,57 +40,83 @@ def serve_static(path):
 
 @app.route("/api/status", methods=["GET"])
 def status():
-    return jsonify({"running": is_running()})
+    participants = discover_participants()
+    matches = arena_store.matches()
+    board = rank_participants(participants, matches, load_holdout_results())
+    evaluation = read_json(EVALUATION_FILE, {"state": "idle"})
+    arena = arena_controller.status()
+    return jsonify({
+        "arena": arena,
+        "state": arena.get("state"),
+        "running": arena.get("state") == "running",
+        "leaderboard": board,
+        "participants": [participant.to_dict() for participant in participants],
+        "current_match": arena.get("current_match"),
+        "recent_matches": matches[-20:][::-1],
+        "evaluation": evaluation,
+        "errors": [participant.to_dict() for participant in participants if participant.load_status != "loadable"],
+    })
 
 @app.route("/api/start", methods=["POST"])
 def start():
-    global arena_process, train_process
-    if not is_running():
-        # Make sure no old processes are running
-        kill_tourney()
-        
-        # Start new processes
-        cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-        cmd_arena = "source venv/bin/activate && python src/auto_arena.py"
-        # cmd_train = "source venv/bin/activate && python src/auto_train.py"
-        
-        arena_process = subprocess.Popen(cmd_arena, shell=True, cwd=cwd, executable="/bin/zsh")
-        # train_process = subprocess.Popen(cmd_train, shell=True, cwd=cwd, executable="/bin/zsh")
-        return jsonify({"success": True, "message": "Arena started (Training disabled)!"})
-    return jsonify({"success": False, "message": "Already running!"})
+    success, message = arena_controller.start()
+    return jsonify({"success": success, "message": message, "arena": arena_controller.status()}), (200 if success else 409)
+
+@app.route("/api/start", methods=["OPTIONS"])
+def start_options():
+    return ("", 204)
 
 @app.route("/api/pause", methods=["POST"])
 def pause():
-    kill_tourney()
-    return jsonify({"success": True, "message": "Tournament paused!"})
+    success, message = arena_controller.pause()
+    return jsonify({"success": success, "message": message, "arena": arena_controller.status()}), (200 if success else 409)
+
+@app.route("/api/pause", methods=["OPTIONS"])
+def pause_options():
+    return ("", 204)
+
+@app.route("/api/stop", methods=["POST"])
+def stop():
+    success, message = arena_controller.stop()
+    return jsonify({"success": success, "message": message, "arena": arena_controller.status()})
+
 
 @app.route("/api/reset", methods=["POST"])
 def reset():
-    kill_tourney()
-    
-    cwd = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    
-    wipe_script = """
-    # 1. Nur Stats und Replays löschen
-    rm -f decks/*.json
-    find replays -name "*.json" -type f -delete
-    
-    # Keine Modelle mehr aus Backup kopieren!
-    
-    # 2. Initialize generation
-    echo '{"generation": 1}' > decks/generation.json
-    """
-    
-    subprocess.run(wipe_script, shell=True, cwd=cwd, executable="/bin/zsh")
-    
-    # Restart
-    global arena_process, train_process
-    cmd_arena = "source venv/bin/activate && python src/auto_arena.py"
-    # cmd_train = "source venv/bin/activate && python src/auto_train.py"
-    arena_process = subprocess.Popen(cmd_arena, shell=True, cwd=cwd, executable="/bin/zsh")
-    # train_process = subprocess.Popen(cmd_train, shell=True, cwd=cwd, executable="/bin/zsh")
-    
-    return jsonify({"success": True, "message": "Factory reset complete. Tournament restarting..."})
+    data = request.get_json(silent=True) or {}
+    if data.get("confirmation") != "RESET ARENA":
+        return jsonify({"success": False, "message": "Exact confirmation 'RESET ARENA' is required."}), 400
+    include_replays = bool(data.get("include_replays", False))
+    success, message = arena_controller.reset()
+    if include_replays:
+        replay_root = os.path.join(BASE_DIR, "replays")
+        if os.path.isdir(replay_root):
+            for dirpath, _, filenames in os.walk(replay_root):
+                for filename in filenames:
+                    if filename.endswith(".json"):
+                        os.unlink(os.path.join(dirpath, filename))
+        message += " Arena replays were also removed as confirmed."
+    return jsonify({"success": success, "message": message, "arena": arena_controller.status()})
+
+@app.route("/api/reset", methods=["OPTIONS"])
+def reset_options():
+    return ("", 204)
+
+
+@app.route("/api/refresh", methods=["GET"])
+def refresh():
+    return status()
+
+
+@app.route("/api/leaderboard", methods=["GET"])
+def leaderboard():
+    return jsonify({"rows": rank_participants(discover_participants(), arena_store.matches(), load_holdout_results())})
+
+
+@app.route("/api/participants", methods=["GET"])
+def participants():
+    values = discover_participants()
+    return jsonify({"participants": [value.to_dict() for value in values]})
 
 @app.route('/api/available_decks', methods=['GET'])
 def get_available_decks():
@@ -113,6 +128,7 @@ def get_available_decks():
     return jsonify({"decks": sorted(decks)})
 
 WATCHED_FILE = os.path.join(BASE_DIR, "decks", "watched_models.json")
+replay_metadata_cache = {}
 
 @app.route('/api/watched', methods=['GET'])
 def get_watched():
@@ -158,19 +174,30 @@ def get_replays():
                     continue
                 seen.add(rel_path)
 
-                metadata = {}
-                snapshots = None
-                try:
-                    with open(abs_path, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if isinstance(data, list):
-                        snapshots = len(data)
-                        if data and isinstance(data[0], dict):
-                            metadata = data[0].get("metadata") or {}
-                except Exception:
-                    pass
-
                 stat = os.stat(abs_path)
+                cache_key = (stat.st_mtime_ns, stat.st_size)
+                cached = replay_metadata_cache.get(abs_path)
+                if cached and cached["key"] == cache_key:
+                    metadata = cached["metadata"]
+                    snapshots = cached["snapshots"]
+                else:
+                    metadata = {}
+                    snapshots = None
+                    try:
+                        with open(abs_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        if isinstance(data, list):
+                            snapshots = len(data)
+                            if data and isinstance(data[0], dict):
+                                metadata = data[0].get("metadata") or {}
+                    except Exception:
+                        pass
+                    replay_metadata_cache[abs_path] = {
+                        "key": cache_key,
+                        "metadata": metadata,
+                        "snapshots": snapshots,
+                    }
+
                 replay_url = "/" + quote(rel_path, safe="/")
                 replays.append({
                     "group": group,
@@ -186,9 +213,38 @@ def get_replays():
     replays.sort(key=lambda item: item["mtime"], reverse=True)
     return jsonify({"replays": replays})
 
+
+@app.route('/api/evaluation/start', methods=['POST'])
+def start_evaluation():
+    global evaluation_process
+    if evaluation_process is not None and evaluation_process.poll() is None:
+        return jsonify({"success": False, "message": "An evaluation is already running."}), 409
+    data = request.get_json(silent=True) or {}
+    bot_id = str(data.get("bot_id") or "")
+    games = int(data.get("games", 30))
+    participant = next((item for item in discover_participants() if item.bot_id == bot_id), None)
+    if participant is None or not participant.enabled or participant.load_status != "loadable":
+        return jsonify({"success": False, "message": "Select an enabled, loadable PPO bot."}), 400
+    if participant.bot_type != "ppo" or not participant.model_path:
+        return jsonify({"success": False, "message": "Holdout evaluation currently requires a PPO model."}), 400
+    if arena_controller.status().get("state") == "running":
+        arena_controller.pause()
+    os.makedirs(os.path.join(BASE_DIR, "arena_data"), exist_ok=True)
+    evaluation_process = subprocess.Popen(
+        [sys.executable, "-m", "src.evaluation_worker", "--bot-id", bot_id,
+         "--model", participant.model_path, "--games", str(games)],
+        cwd=BASE_DIR, stdout=open(os.path.join(BASE_DIR, "arena_data", "evaluation.log"), "a"),
+        stderr=subprocess.STDOUT,
+    )
+    return jsonify({"success": True, "message": "Holdout evaluation started.", "evaluation": read_json(EVALUATION_FILE, {"state": "starting"})})
+
+
+@app.route('/api/evaluation', methods=['GET'])
+def get_evaluation():
+    return jsonify(read_json(EVALUATION_FILE, {"state": "idle"}))
+
 @app.route('/api/train_custom', methods=['POST'])
 def train_custom():
-    global process
     data = request.json
     
     learning_deck = data.get("learning_deck")
@@ -216,7 +272,7 @@ def train_custom():
     else:
         learning_model = resolve_deck_model_base(learn_id)
         
-    opponent_model = resolve_deck_model_path(opp_id) or f"models/ppo_deck_{opp_id}"
+    opponent_model = resolve_deck_model_path(opp_id, include_variants=False) or f"models/ppo_deck_{opp_id}.zip"
     
     global train_process
     
@@ -224,19 +280,22 @@ def train_custom():
     if train_process is not None and train_process.poll() is None:
         train_process.terminate()
         
+    if "models/holdout" in opponent_model.replace("\\", "/"):
+        return jsonify({"error": "Holdout opponents are evaluation-only and cannot be used for training."}), 400
+
     cmd = [
-        "venv/bin/python", "src/train_vs.py",
-        "--learning-deck", f"decks/{learning_deck}",
-        "--learning-model", learning_model,
-        "--opponent-deck", f"decks/{opponent_deck}",
-        "--opponent-model", opponent_model,
+        "venv/bin/python", "src/train.py",
+        "--deck", f"decks/{learning_deck}",
+        "--model-name", learning_model,
+        "--opp-deck", f"decks/{opponent_deck}",
+        "--opp-model", opponent_model,
         "--timesteps", str(timesteps),
         "--num-envs", "8",
-        "--algo", algo,
-        "--ent-start", str(ent_start),
-        "--ent-end", str(ent_end),
-        "--reward-config", json.dumps(reward_config)
+        "--ent-coef", str(ent_start),
     ]
+    target_zip = learning_model if learning_model.endswith(".zip") else f"{learning_model}.zip"
+    if os.path.exists(target_zip):
+        cmd.append("--continue-existing")
     train_log = open("server_train.log", "w")
     train_process = subprocess.Popen(cmd, stdout=train_log, stderr=subprocess.STDOUT)
     # Reset progress file
@@ -259,7 +318,7 @@ def cancel_custom_training():
             
         # 2. Forcefully kill any stray background training processes (e.g., if server was restarted)
         import os
-        os.system("pkill -f 'src/train_vs.py'")
+        os.system("pkill -f 'src/train.py'")
             
         # 3. Update the progress file so frontend knows it stopped
         try:

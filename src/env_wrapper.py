@@ -3,14 +3,28 @@ from gymnasium import spaces
 import numpy as np
 import os
 
-from cg.game import battle_start, battle_select, battle_finish
-from cg.api import AreaType, OptionType, SelectContext, to_observation_class, Observation, all_card_data, all_attack, CardType, LogType
+from src.cg.game import battle_start, battle_select, battle_finish
+from src.cg.api import AreaType, OptionType, SelectContext, to_observation_class, Observation, all_card_data, all_attack, CardType, LogType
+from src.agents.rule_based_agent import RuleBasedPokemonAgent, is_rule_based_model_spec
+from src.model_paths import strip_zip_suffix
 
 RESULT_REASON_PRIZE = 1
 RESULT_REASON_DECK_OUT = 2
 RESULT_REASON_BENCH_OUT = 3
 STOP_ACTION = 999
 MAX_ENCODED_OPTIONS = 65
+MAX_CARD_ID = 1999
+MAX_ATTACK_ID = 1999
+ENTITY_SLOTS = 12
+ENTITY_FEATURE_DIM = 36
+MAX_ENTITY_PRE_EVOLUTIONS = 3
+MAX_ENTITY_ENERGY_CARDS = 8
+HAND_CARD_SLOTS = 24
+DISCARD_CARD_SLOTS = 30
+REVEALED_CARD_SLOTS = 120
+CONTEXT_CARD_SLOTS = 2
+LOG_CARD_SLOTS = 10
+OPTION_FEATURE_DIM = 8
 
 DEFAULT_REWARD_CONFIG = {
     "STEP_PENALTY": 0.0,
@@ -44,6 +58,38 @@ def _pokemon_key(pokemon):
 def _same_pokemon(a, b):
     a_key = _pokemon_key(a)
     return a_key is not None and a_key == _pokemon_key(b)
+
+def _enum_value(value, enum_class, default=0):
+    """Convert API enum values and replay-friendly enum names to integers."""
+    if value is None:
+        return default
+    raw_value = getattr(value, "value", value)
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        pass
+
+    if isinstance(raw_value, str):
+        normalized = raw_value.replace("-", "_").replace(" ", "_").upper()
+        for member in enum_class:
+            if member.name == normalized:
+                return int(member.value)
+    return default
+
+def _bounded_id(value, maximum):
+    raw_value = getattr(value, "id", value)
+    try:
+        identifier = int(raw_value)
+    except (TypeError, ValueError):
+        return 0
+    return identifier if 0 < identifier <= maximum else 0
+
+def _energy_value(value):
+    raw_value = getattr(value, "value", value)
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return 0
 
 def advance_selection(obs, action, pending_indices=None, stop_action=STOP_ACTION):
     """Advance one autoregressive selection step.
@@ -177,11 +223,13 @@ class PokemonTCGEnv(gym.Env):
             if 1 <= card_id <= 8:
                 self.valid_energy_types.add(card_id)
                 
-        # Build map of cardId -> exact attack costs dynamically
+        # Build reusable card/attack lookups for reward logic and Observation V2.
         try:
-            attacks_map = {a.attackId: a.energies for a in all_attack()}
+            self.card_data_by_id = {card.cardId: card for card in all_card_data()}
+            self.attack_data_by_id = {attack.attackId: attack for attack in all_attack()}
+            attacks_map = {attack_id: attack.energies for attack_id, attack in self.attack_data_by_id.items()}
             self.pokemon_attack_costs = {}
-            for card in all_card_data():
+            for card in self.card_data_by_id.values():
                 if card.cardType == CardType.POKEMON:
                     costs = []
                     for attack_id in card.attacks:
@@ -191,19 +239,69 @@ class PokemonTCGEnv(gym.Env):
                     self.pokemon_attack_costs[card.cardId] = costs
         except Exception as e:
             print("Failed to build dynamic pokemon energy mapping:", e)
+            self.card_data_by_id = {}
+            self.attack_data_by_id = {}
             self.pokemon_attack_costs = {}
         
         # Action space: a discrete selection of an option from the available ones.
         self.max_options = STOP_ACTION + 1
         self.action_space = spaces.Discrete(self.max_options)
         
-        # Observation space: 1500-dim vector + action mask + aux target
+        # Observation V2 keeps the legacy vector for old opponent checkpoints,
+        # while exposing categorical cards, structured field entities and legal
+        # options to new policies.
         self.vector_dim = 1500
         self.aux_dim = 2000
         self.observation_space = spaces.Dict({
-            "vector": spaces.Box(low=-1000, high=1000, shape=(self.vector_dim,), dtype=np.float32),
+            "vector": spaces.Box(low=-2000, high=2000, shape=(self.vector_dim,), dtype=np.float32),
             "action_mask": spaces.Box(low=0, high=1, shape=(self.max_options,), dtype=np.int8),
-            "aux_target": spaces.Box(low=0, high=1, shape=(self.aux_dim,), dtype=np.float32)
+            "aux_target": spaces.Box(low=0, high=1, shape=(self.aux_dim,), dtype=np.float32),
+            "entity_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(ENTITY_SLOTS,), dtype=np.int32),
+            "entity_features": spaces.Box(
+                low=-1, high=10, shape=(ENTITY_SLOTS, ENTITY_FEATURE_DIM), dtype=np.float32
+            ),
+            "entity_tool_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(ENTITY_SLOTS,), dtype=np.int32),
+            "entity_pre_evolution_ids": spaces.Box(
+                low=0,
+                high=MAX_CARD_ID,
+                shape=(ENTITY_SLOTS, MAX_ENTITY_PRE_EVOLUTIONS),
+                dtype=np.int32,
+            ),
+            "entity_energy_card_ids": spaces.Box(
+                low=0,
+                high=MAX_CARD_ID,
+                shape=(ENTITY_SLOTS, MAX_ENTITY_ENERGY_CARDS),
+                dtype=np.int32,
+            ),
+            "hand_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(HAND_CARD_SLOTS,), dtype=np.int32),
+            "discard_ids": spaces.Box(
+                low=0, high=MAX_CARD_ID, shape=(2, DISCARD_CARD_SLOTS), dtype=np.int32
+            ),
+            "revealed_ids": spaces.Box(
+                low=0, high=MAX_CARD_ID, shape=(REVEALED_CARD_SLOTS,), dtype=np.int32
+            ),
+            "context_card_ids": spaces.Box(
+                low=0, high=MAX_CARD_ID, shape=(CONTEXT_CARD_SLOTS,), dtype=np.int32
+            ),
+            "log_card_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(LOG_CARD_SLOTS,), dtype=np.int32),
+            "option_card_ids": spaces.Box(
+                low=0, high=MAX_CARD_ID, shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
+            ),
+            "option_attack_ids": spaces.Box(
+                low=0, high=MAX_ATTACK_ID, shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
+            ),
+            "option_types": spaces.Box(
+                low=0, high=len(OptionType), shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
+            ),
+            "option_areas": spaces.Box(
+                low=0, high=len(AreaType), shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
+            ),
+            "option_features": spaces.Box(
+                low=-1,
+                high=10,
+                shape=(MAX_ENCODED_OPTIONS, OPTION_FEATURE_DIM),
+                dtype=np.float32,
+            ),
         })
         
         self.reward_keys = [
@@ -242,8 +340,10 @@ class PokemonTCGEnv(gym.Env):
         if not old_obs.current or not new_obs.current:
             return 0.0
 
-        old_active = old_obs.current.players[0].active[0] if old_obs.current.players[0].active else None
-        new_active = new_obs.current.players[0].active[0] if new_obs.current.players[0].active else None
+        old_player = old_obs.current.players[self.learner_perspective]
+        new_player = new_obs.current.players[self.learner_perspective]
+        old_active = old_player.active[0] if old_player.active else None
+        new_active = new_player.active[0] if new_player.active else None
         if old_active is None or new_active is None or _same_pokemon(old_active, new_active):
             return 0.0
         if old_active.hp <= 0:
@@ -274,20 +374,24 @@ class PokemonTCGEnv(gym.Env):
             if cached_model is not None:
                 self.opponent_model = cached_model
         if self.opponent_model_path is not None and self.opponent_model is None:
-            # We import here to avoid circular imports if necessary
-            from stable_baselines3 import PPO
-            try:
-                from src.custom_ppo import CustomPPO
-                self.opponent_model = CustomPPO.load(self.opponent_model_path)
-            except Exception as e:
+            if is_rule_based_model_spec(self.opponent_model_path):
+                self.opponent_model = RuleBasedPokemonAgent()
+            else:
+                self.opponent_model_path = strip_zip_suffix(self.opponent_model_path)
+                # We import here to avoid circular imports if necessary
+                from stable_baselines3 import PPO
                 try:
-                    self.opponent_model = PPO.load(self.opponent_model_path)
-                except Exception as fallback_e:
-                    raise RuntimeError(
-                        f"Failed to load opponent model {self.opponent_model_path}: "
-                        f"CustomPPO={e}; PPO={fallback_e}"
-                    ) from fallback_e
-            self.opponent_model_cache[self.opponent_model_path] = self.opponent_model
+                    from src.custom_ppo import CustomPPO
+                    self.opponent_model = CustomPPO.load(self.opponent_model_path)
+                except Exception as e:
+                    try:
+                        self.opponent_model = PPO.load(self.opponent_model_path)
+                    except Exception as fallback_e:
+                        raise RuntimeError(
+                            f"Failed to load opponent model {self.opponent_model_path}: "
+                            f"CustomPPO={e}; PPO={fallback_e}"
+                        ) from fallback_e
+                self.opponent_model_cache[self.opponent_model_path] = self.opponent_model
         
         if self.current_obs_dict is not None:
             battle_finish()
@@ -319,7 +423,24 @@ class PokemonTCGEnv(gym.Env):
         self.pending_selection = selected
 
         if not committed:
-            if invalid and len(self.pending_selection) > 0:
+            if invalid:
+                legal_options = [
+                    index for index in range(min(valid_options, STOP_ACTION))
+                    if index not in self.pending_selection
+                ]
+                if legal_options:
+                    # Old policies can emit actions that are invalid for the
+                    # mirrored player perspective. Advance with a legal option
+                    # instead of returning the identical state forever.
+                    action = legal_options[0]
+                    selected, committed, _ = advance_selection(
+                        old_obs,
+                        action,
+                        self.pending_selection,
+                    )
+                    self.pending_selection = selected
+
+            if invalid and not committed and len(self.pending_selection) > 0:
                 # Auto-commit if minCount is already satisfied to avoid
                 # infinite invalid-action loops (old models don't know STOP_ACTION).
                 select = getattr(old_obs, "select", None)
@@ -380,24 +501,24 @@ class PokemonTCGEnv(gym.Env):
             return 0.0
             
         reward = 0.0
-        old_p0 = old_obs.current.players[0]
-        old_p1 = old_obs.current.players[1]
-        new_p0 = new_obs.current.players[0]
-        new_p1 = new_obs.current.players[1]
+        old_me = old_obs.current.players[self.learner_perspective]
+        old_opponent = old_obs.current.players[1 - self.learner_perspective]
+        new_me = new_obs.current.players[self.learner_perspective]
+        new_opponent = new_obs.current.players[1 - self.learner_perspective]
         
         # Prize Card Taken/Lost
-        delta_prize_0 = len(old_p0.prize) - len(new_p0.prize)
-        if delta_prize_0 > 0:
-            reward += self._add_reward("prize_taken", delta_prize_0 * self._reward("PRIZE_TAKEN"))
+        delta_my_prize = len(old_me.prize) - len(new_me.prize)
+        if delta_my_prize > 0:
+            reward += self._add_reward("prize_taken", delta_my_prize * self._reward("PRIZE_TAKEN"))
             
-        delta_prize_1 = len(old_p1.prize) - len(new_p1.prize)
-        if delta_prize_1 > 0:
-            reward += self._add_reward("prize_lost", delta_prize_1 * self._reward("PRIZE_LOST"))
+        delta_opponent_prize = len(old_opponent.prize) - len(new_opponent.prize)
+        if delta_opponent_prize > 0:
+            reward += self._add_reward("prize_lost", delta_opponent_prize * self._reward("PRIZE_LOST"))
             
         # Deck shrink penalty
-        delta_deck_0 = old_p0.deckCount - new_p0.deckCount
-        if delta_deck_0 > 0:
-            reward += self._deck_shrink_reward(old_p0.deckCount, new_p0.deckCount)
+        delta_my_deck = old_me.deckCount - new_me.deckCount
+        if delta_my_deck > 0:
+            reward += self._deck_shrink_reward(old_me.deckCount, new_me.deckCount)
 
         # Damage Deltas (BOOSTED for Aggro)
         def sum_hp(p):
@@ -407,11 +528,11 @@ class PokemonTCGEnv(gym.Env):
                 if b: hp += b.hp
             return hp
             
-        delta_my_hp = sum_hp(old_p0) - sum_hp(new_p0)
+        delta_my_hp = sum_hp(old_me) - sum_hp(new_me)
         if delta_my_hp > 0:
             reward += self._add_reward("damage_taken", delta_my_hp * self._reward("DAMAGE_TAKEN"))
             
-        delta_opp_hp = sum_hp(old_p1) - sum_hp(new_p1)
+        delta_opp_hp = sum_hp(old_opponent) - sum_hp(new_opponent)
         if delta_opp_hp > 0:
             reward += self._add_reward("damage_dealt", delta_opp_hp * self._reward("DAMAGE_DEALT"))
             
@@ -423,20 +544,20 @@ class PokemonTCGEnv(gym.Env):
                 if b: e += len(b.energies)
             return e
             
-        delta_total_energy = sum_energies(new_p0) - sum_energies(old_p0)
+        delta_total_energy = sum_energies(new_me) - sum_energies(old_me)
         if delta_total_energy > 0:
             active_attached = False
             useful_energy_attached = False
-            if old_p0.active and old_p0.active[0] and new_p0.active and new_p0.active[0]:
-                if _same_pokemon(old_p0.active[0], new_p0.active[0]):
-                    old_e_count = len(old_p0.active[0].energies)
-                    new_e_count = len(new_p0.active[0].energies)
+            if old_me.active and old_me.active[0] and new_me.active and new_me.active[0]:
+                if _same_pokemon(old_me.active[0], new_me.active[0]):
+                    old_e_count = len(old_me.active[0].energies)
+                    new_e_count = len(new_me.active[0].energies)
                     if new_e_count > old_e_count:
                         active_attached = True
-                        old_e_list = [int(e) if not hasattr(e, 'value') else e.value for e in old_p0.active[0].energies]
-                        new_e_list = [int(e) if not hasattr(e, 'value') else e.value for e in new_p0.active[0].energies]
+                        old_e_list = [int(e) if not hasattr(e, 'value') else e.value for e in old_me.active[0].energies]
+                        new_e_list = [int(e) if not hasattr(e, 'value') else e.value for e in new_me.active[0].energies]
                         
-                        active_pokemon_id = new_p0.active[0].id
+                        active_pokemon_id = new_me.active[0].id
                         costs = self.pokemon_attack_costs.get(active_pokemon_id, [])
                         
                         def calc_deficit(attached, cost):
@@ -553,6 +674,296 @@ class PokemonTCGEnv(gym.Env):
             
         return done
 
+    @staticmethod
+    def _attack_deficit(attached_energies, attack_cost):
+        attached_counts = {}
+        for energy in attached_energies:
+            energy_type = _energy_value(energy)
+            attached_counts[energy_type] = attached_counts.get(energy_type, 0) + 1
+
+        missing_specific = 0
+        colorless_cost = 0
+        for required_energy in attack_cost:
+            required_type = _energy_value(required_energy)
+            if required_type == 0:
+                colorless_cost += 1
+            elif attached_counts.get(required_type, 0) > 0:
+                attached_counts[required_type] -= 1
+            else:
+                missing_specific += 1
+
+        remaining_energy = sum(attached_counts.values())
+        return missing_specific + max(0, colorless_cost - remaining_energy)
+
+    def _resolve_option_card_id(self, obs, option, perspective):
+        """Resolve options that only reference ``area + index`` to a card ID."""
+        direct_id = _bounded_id(getattr(option, "cardId", None), MAX_CARD_ID)
+        if direct_id:
+            return direct_id
+        if not obs.current:
+            return 0
+
+        option_type = _enum_value(getattr(option, "type", None), OptionType)
+        area = _enum_value(getattr(option, "area", None), AreaType)
+        try:
+            index = int(getattr(option, "index", 0) or 0)
+        except (TypeError, ValueError):
+            index = 0
+        try:
+            player_index = int(getattr(option, "playerIndex", perspective))
+        except (TypeError, ValueError):
+            player_index = perspective
+        if player_index not in (0, 1):
+            player_index = perspective
+        player = obs.current.players[player_index]
+
+        # Main-phase PLAY options omit ``area`` and point directly into the hand.
+        if option_type == int(OptionType.PLAY) and area == 0:
+            area = int(AreaType.HAND)
+
+        collections = {
+            int(AreaType.HAND): list(getattr(player, "hand", None) or []),
+            int(AreaType.DISCARD): list(getattr(player, "discard", None) or []),
+            int(AreaType.PRIZE): list(getattr(player, "prize", None) or []),
+            int(AreaType.BENCH): list(getattr(player, "bench", None) or []),
+            int(AreaType.ACTIVE): list(getattr(player, "active", None) or []),
+            int(AreaType.STADIUM): list(getattr(obs.current, "stadium", None) or []),
+            int(AreaType.LOOKING): list(getattr(obs.current, "looking", None) or []),
+        }
+        if area == int(AreaType.DECK):
+            collections[area] = list(getattr(obs.select, "deck", None) or [])
+
+        cards = collections.get(area, [])
+        referenced_card = cards[index] if 0 <= index < len(cards) else None
+
+        # Energy/tool selection options reference the owning in-play Pokémon.
+        energy_index = getattr(option, "energyIndex", None)
+        tool_index = getattr(option, "toolIndex", None)
+        if referenced_card is not None and area in (int(AreaType.ACTIVE), int(AreaType.BENCH)):
+            if energy_index is not None:
+                energy_cards = list(getattr(referenced_card, "energyCards", None) or [])
+                try:
+                    energy_index = int(energy_index)
+                except (TypeError, ValueError):
+                    energy_index = -1
+                if 0 <= energy_index < len(energy_cards):
+                    return _bounded_id(energy_cards[energy_index], MAX_CARD_ID)
+            if tool_index is not None:
+                tools = list(getattr(referenced_card, "tools", None) or [])
+                try:
+                    tool_index = int(tool_index)
+                except (TypeError, ValueError):
+                    tool_index = -1
+                if 0 <= tool_index < len(tools):
+                    return _bounded_id(tools[tool_index], MAX_CARD_ID)
+
+        if referenced_card is not None:
+            return _bounded_id(referenced_card, MAX_CARD_ID)
+
+        # ATTACK and RETREAT refer to the acting Active Pokémon without an area.
+        if option_type in (int(OptionType.ATTACK), int(OptionType.RETREAT)):
+            active = list(getattr(player, "active", None) or [])
+            return _bounded_id(active[0], MAX_CARD_ID) if active else 0
+        return 0
+
+    def _structured_observation(self, obs, perspective, pending_selection):
+        entity_ids = np.zeros(ENTITY_SLOTS, dtype=np.int32)
+        entity_features = np.zeros((ENTITY_SLOTS, ENTITY_FEATURE_DIM), dtype=np.float32)
+        entity_tool_ids = np.zeros(ENTITY_SLOTS, dtype=np.int32)
+        entity_pre_evolution_ids = np.zeros(
+            (ENTITY_SLOTS, MAX_ENTITY_PRE_EVOLUTIONS), dtype=np.int32
+        )
+        entity_energy_card_ids = np.zeros(
+            (ENTITY_SLOTS, MAX_ENTITY_ENERGY_CARDS), dtype=np.int32
+        )
+        hand_ids = np.zeros(HAND_CARD_SLOTS, dtype=np.int32)
+        discard_ids = np.zeros((2, DISCARD_CARD_SLOTS), dtype=np.int32)
+        revealed_ids = np.zeros(REVEALED_CARD_SLOTS, dtype=np.int32)
+        context_card_ids = np.zeros(CONTEXT_CARD_SLOTS, dtype=np.int32)
+        log_card_ids = np.zeros(LOG_CARD_SLOTS, dtype=np.int32)
+        option_card_ids = np.zeros(MAX_ENCODED_OPTIONS, dtype=np.int32)
+        option_attack_ids = np.zeros(MAX_ENCODED_OPTIONS, dtype=np.int32)
+        option_types = np.zeros(MAX_ENCODED_OPTIONS, dtype=np.int32)
+        option_areas = np.zeros(MAX_ENCODED_OPTIONS, dtype=np.int32)
+        option_features = np.zeros((MAX_ENCODED_OPTIONS, OPTION_FEATURE_DIM), dtype=np.float32)
+
+        if obs.current is None:
+            return {
+                "entity_ids": entity_ids,
+                "entity_features": entity_features,
+                "entity_tool_ids": entity_tool_ids,
+                "entity_pre_evolution_ids": entity_pre_evolution_ids,
+                "entity_energy_card_ids": entity_energy_card_ids,
+                "hand_ids": hand_ids,
+                "discard_ids": discard_ids,
+                "revealed_ids": revealed_ids,
+                "context_card_ids": context_card_ids,
+                "log_card_ids": log_card_ids,
+                "option_card_ids": option_card_ids,
+                "option_attack_ids": option_attack_ids,
+                "option_types": option_types,
+                "option_areas": option_areas,
+                "option_features": option_features,
+            }
+
+        players = [obs.current.players[perspective], obs.current.players[1 - perspective]]
+        for relative_player, player in enumerate(players):
+            pokemon = []
+            active = list(getattr(player, "active", None) or [])
+            pokemon.append(active[0] if active else None)
+            pokemon.extend(list(getattr(player, "bench", None) or [])[:5])
+            pokemon.extend([None] * (6 - len(pokemon)))
+
+            for position, card in enumerate(pokemon[:6]):
+                slot = relative_player * 6 + position
+                if card is None:
+                    continue
+                card_id = _bounded_id(card, MAX_CARD_ID)
+                entity_ids[slot] = card_id
+                features = entity_features[slot]
+                features[0] = 1.0
+                features[1] = float(relative_player)
+                features[2] = float(position == 0)
+                features[3] = float(max(0, position - 1)) / 4.0
+                hp = float(getattr(card, "hp", 0) or 0)
+                max_hp = float(getattr(card, "maxHp", 0) or 0)
+                features[4] = hp / 400.0
+                features[5] = max_hp / 400.0
+                features[6] = max(0.0, max_hp - hp) / 400.0
+                features[7] = float(bool(getattr(card, "appearThisTurn", False)))
+
+                attached_energies = list(getattr(card, "energies", None) or [])
+                for energy in attached_energies:
+                    energy_type = _energy_value(energy)
+                    if 0 <= energy_type < 12:
+                        features[8 + energy_type] = min(10.0, features[8 + energy_type] + 0.25)
+                energy_count = len(attached_energies)
+                features[20] = min(10.0, energy_count / 8.0)
+
+                tools = list(getattr(card, "tools", None) or [])
+                pre_evolutions = list(getattr(card, "preEvolution", None) or [])
+                energy_cards = list(getattr(card, "energyCards", None) or [])
+                features[21] = float(bool(tools))
+                features[22] = min(1.0, len(pre_evolutions) / 3.0)
+                if tools:
+                    entity_tool_ids[slot] = _bounded_id(tools[0], MAX_CARD_ID)
+                for index, pre_evolution in enumerate(pre_evolutions[:MAX_ENTITY_PRE_EVOLUTIONS]):
+                    entity_pre_evolution_ids[slot, index] = _bounded_id(pre_evolution, MAX_CARD_ID)
+                for index, energy_card in enumerate(energy_cards[:MAX_ENTITY_ENERGY_CARDS]):
+                    entity_energy_card_ids[slot, index] = _bounded_id(energy_card, MAX_CARD_ID)
+
+                static_card = self.card_data_by_id.get(card_id)
+                retreat_cost = int(getattr(static_card, "retreatCost", 0) or 0)
+                features[23] = retreat_cost / 5.0
+                features[24] = max(0, retreat_cost - energy_count) / 5.0
+                attack_costs = self.pokemon_attack_costs.get(card_id, [])
+                for attack_index, cost in enumerate(attack_costs[:2]):
+                    deficit = self._attack_deficit(attached_energies, cost)
+                    features[25 + attack_index] = deficit / 5.0
+                    features[27 + attack_index] = float(deficit == 0)
+
+                if position == 0:
+                    features[29] = float(bool(getattr(player, "poisoned", False)))
+                    features[30] = float(bool(getattr(player, "burned", False)))
+                    features[31] = float(bool(getattr(player, "asleep", False)))
+                    features[32] = float(bool(getattr(player, "paralyzed", False)))
+                    features[33] = float(bool(getattr(player, "confused", False)))
+                    actual_retreat_available = any(
+                        _enum_value(getattr(option, "type", None), OptionType)
+                        == int(OptionType.RETREAT)
+                        for option in list(getattr(obs.select, "option", None) or [])
+                    )
+                    features[34] = float(
+                        relative_player == 0
+                        and actual_retreat_available
+                    )
+                features[35] = min(1.0, len(attack_costs) / 2.0)
+
+        our_player = players[0]
+        for index, card in enumerate(list(getattr(our_player, "hand", None) or [])[:HAND_CARD_SLOTS]):
+            hand_ids[index] = _bounded_id(card, MAX_CARD_ID)
+        for relative_player, player in enumerate(players):
+            discard = list(getattr(player, "discard", None) or [])[-DISCARD_CARD_SLOTS:]
+            for index, card in enumerate(discard):
+                discard_ids[relative_player, index] = _bounded_id(card, MAX_CARD_ID)
+
+        revealed = []
+        revealed.extend(list(getattr(obs.select, "deck", None) or []))
+        revealed.extend(list(getattr(obs.current, "looking", None) or []))
+        for index, card in enumerate(revealed[:REVEALED_CARD_SLOTS]):
+            revealed_ids[index] = _bounded_id(card, MAX_CARD_ID)
+        context_card_ids[0] = _bounded_id(getattr(obs.select, "contextCard", None), MAX_CARD_ID)
+        stadium = list(getattr(obs.current, "stadium", None) or [])
+        if stadium:
+            context_card_ids[1] = _bounded_id(stadium[0], MAX_CARD_ID)
+
+        recent_logs = list(getattr(obs, "logs", None) or [])[-5:]
+        for index, log in enumerate(reversed(recent_logs)):
+            log_card_ids[index * 2] = _bounded_id(getattr(log, "cardId", None), MAX_CARD_ID)
+            log_card_ids[index * 2 + 1] = _bounded_id(
+                getattr(log, "cardIdTarget", None), MAX_CARD_ID
+            )
+
+        selected_indices = set(pending_selection)
+        options = list(getattr(obs.select, "option", None) or [])[:MAX_ENCODED_OPTIONS]
+        for index, option in enumerate(options):
+            option_type = _enum_value(getattr(option, "type", None), OptionType)
+            option_area = _enum_value(getattr(option, "area", None), AreaType)
+            card_id = self._resolve_option_card_id(obs, option, perspective)
+            attack_id = _bounded_id(getattr(option, "attackId", None), MAX_ATTACK_ID)
+            # Reserve zero for padding; OptionType.NUMBER itself has enum value zero.
+            option_types[index] = option_type + 1
+            option_areas[index] = option_area
+            option_card_ids[index] = card_id
+            option_attack_ids[index] = attack_id
+
+            raw_player = getattr(option, "playerIndex", perspective)
+            try:
+                raw_player = int(raw_player)
+            except (TypeError, ValueError):
+                raw_player = perspective
+            raw_index = getattr(option, "index", 0)
+            raw_in_play_index = getattr(option, "inPlayIndex", 0)
+            raw_number = getattr(option, "number", 0)
+            raw_count = getattr(option, "count", 0)
+            numeric_values = []
+            for value in (raw_index, raw_in_play_index, raw_number, raw_count):
+                try:
+                    numeric_values.append(float(value or 0))
+                except (TypeError, ValueError):
+                    numeric_values.append(0.0)
+            option_features[index] = np.asarray(
+                [
+                    float(abs(raw_player - perspective)),
+                    numeric_values[0] / 60.0,
+                    numeric_values[1] / 5.0,
+                    numeric_values[2] / 60.0,
+                    numeric_values[3] / 60.0,
+                    float(index in selected_indices),
+                    float(card_id > 0),
+                    float(attack_id > 0),
+                ],
+                dtype=np.float32,
+            )
+
+        return {
+            "entity_ids": entity_ids,
+            "entity_features": entity_features,
+            "entity_tool_ids": entity_tool_ids,
+            "entity_pre_evolution_ids": entity_pre_evolution_ids,
+            "entity_energy_card_ids": entity_energy_card_ids,
+            "hand_ids": hand_ids,
+            "discard_ids": discard_ids,
+            "revealed_ids": revealed_ids,
+            "context_card_ids": context_card_ids,
+            "log_card_ids": log_card_ids,
+            "option_card_ids": option_card_ids,
+            "option_attack_ids": option_attack_ids,
+            "option_types": option_types,
+            "option_areas": option_areas,
+            "option_features": option_features,
+        }
+
     def _get_obs(self, perspective=0, pending_selection=None):
         obs = to_observation_class(self.current_obs_dict)
         if pending_selection is None:
@@ -637,7 +1048,7 @@ class PokemonTCGEnv(gym.Env):
             # SelectData Context (250-255)
             vec[255] = state.turnActionCount
             if obs.select:
-                vec[250] = float(obs.select.context)
+                vec[250] = float(_enum_value(obs.select.context, SelectContext))
                 vec[251] = float(obs.select.minCount)
                 vec[252] = float(obs.select.maxCount)
                 vec[253] = float(obs.select.remainDamageCounter)
@@ -740,9 +1151,9 @@ class PokemonTCGEnv(gym.Env):
                     vec[639 + i*2] = float(log.cardId if log.cardId is not None else 0)
                     vec[640 + i*2] = float(log.cardIdTarget if log.cardIdTarget is not None else 0)
                     
-                    vec[1300 + i*3] = float(log.type if log.type is not None else 0)
-                    vec[1301 + i*3] = float(log.fromArea if log.fromArea is not None else 0)
-                    vec[1302 + i*3] = float(log.toArea if log.toArea is not None else 0)
+                    vec[1300 + i*3] = float(_enum_value(log.type, LogType))
+                    vec[1301 + i*3] = float(_enum_value(log.fromArea, AreaType))
+                    vec[1302 + i*3] = float(_enum_value(log.toArea, AreaType))
 
             # Autoregressive selection state. Existing action/output dimensions stay unchanged.
             vec[1490] = float(len(pending_selection))
@@ -757,11 +1168,11 @@ class PokemonTCGEnv(gym.Env):
                 for i in range(opt_len):
                     opt = obs.select.option[i]
                     base = 800 + i*10 if i < 50 else 650 + (i - 50)*10
-                    vec[base] = float(opt.type)
+                    vec[base] = float(_enum_value(opt.type, OptionType))
                     vec[base+1] = float(opt.cardId if opt.cardId is not None else 0)
-                    vec[base+2] = float(opt.area if opt.area is not None else 0)
+                    vec[base+2] = float(_enum_value(opt.area, AreaType))
                     vec[base+3] = float(opt.index if opt.index is not None else 0)
-                    vec[base+4] = float(opt.inPlayArea if opt.inPlayArea is not None else 0)
+                    vec[base+4] = float(_enum_value(opt.inPlayArea, AreaType))
                     vec[base+5] = float(opt.inPlayIndex if opt.inPlayIndex is not None else 0)
                     vec[base+6] = float(opt.attackId if opt.attackId is not None else 0)
                     vec[base+7] = float(opt.specialConditionType if opt.specialConditionType is not None else 0)
@@ -801,7 +1212,8 @@ class PokemonTCGEnv(gym.Env):
             if card_id < 2000 and count > 0:
                 aux_target[card_id] = 1.0
                 
-        return {"vector": vec, "action_mask": mask, "aux_target": aux_target}
+        structured = self._structured_observation(obs, perspective, pending_selection)
+        return {"vector": vec, "action_mask": mask, "aux_target": aux_target, **structured}
         
     def _get_info(self):
         info = {}

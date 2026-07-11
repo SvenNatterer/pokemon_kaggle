@@ -3,10 +3,10 @@ import os
 import re
 
 
-MODEL_PREFIXES = ("ppo_belief_deck", "ppo_v4_deck", "ppo_deck")
-DEFAULT_MODEL_PREFIX = "ppo_deck"
+MODEL_PREFIXES = ("ppo_v5_deck", "ppo_belief_deck", "ppo_v4_deck", "ppo_deck")
+DEFAULT_MODEL_PREFIX = "ppo_v5_deck"
 MODEL_FILE_RE = re.compile(
-    r"^(?P<prefix>ppo(?:_belief|_v4)?_deck)_(?P<deck_id>(?:bank_)?\d+)"
+    r"^(?P<prefix>ppo(?:_belief|_v4|_v5)?_deck)_(?P<deck_id>(?:bank_)?\d+)"
     r"(?P<variant>_.*)?\.zip$"
 )
 
@@ -28,13 +28,17 @@ def parse_deck_model_path(path):
     return data
 
 
+def strip_zip_suffix(path):
+    return path[:-4] if path.endswith(".zip") else path
+
+
 def _candidate_sort_key(path):
     parsed = parse_deck_model_path(path) or {}
     variant = parsed.get("variant", "")
     prefix = parsed.get("prefix", "")
 
-    # Newer files are usually the intended active model. For same-timestamp
-    # ties, prefer final saves over checkpoints/backups and v4 over legacy PPO.
+    # Variant sorting is only used by explicit legacy discovery. Runtime model
+    # resolution defaults to exact final filenames and never selects a variant.
     variant_rank = 2 if not variant else 1 if variant.startswith("_checkpoint_") else 0
     prefix_rank = len(MODEL_PREFIXES) - MODEL_PREFIXES.index(prefix) if prefix in MODEL_PREFIXES else 0
     try:
@@ -71,7 +75,7 @@ def iter_existing_deck_model_paths(deck_id, model_dir="models", include_ghost=Fa
         yield from deck_model_candidates(deck_id, directory, include_variants=include_variants)
 
 
-def resolve_deck_model_path(deck_id, model_dir="models", include_ghost=False, include_variants=True):
+def resolve_deck_model_path(deck_id, model_dir="models", include_ghost=False, include_variants=False):
     return next(iter_existing_deck_model_paths(deck_id, model_dir, include_ghost, include_variants), "")
 
 

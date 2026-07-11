@@ -1,0 +1,23 @@
+{
+    "agents": [
+        {
+            "id": "rule_bot_riolu",
+            "name": "Rule Bot (Riolu)",
+            "agent_type": "rule_based",
+            "deck_path": "decks/deck_bank/bank_18.csv",
+            "version": "rule-v1",
+            "tags": ["current", "rule_based"],
+            "enabled": true
+        },
+        {
+            "id": "foundation__ppo_v4_transfer_source_deck_4_endless_2_ckpt2",
+            "name": "Foundation Deck 4 (Legacy ckpt2)",
+            "agent_type": "ppo",
+            "model_path": "models/foundation/ppo_v4_transfer_source_deck_4_endless_2_ckpt2.zip",
+            "deck_path": "decks/deck_4.csv",
+            "version": "v4",
+            "tags": ["legacy", "foundation", "historical_checkpoint"],
+            "enabled": true
+        }
+    ]
+}

@@ -10,8 +10,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from stable_baselines3 import PPO
 from src.env_wrapper import PokemonTCGEnv, _fit_observation_to_model_space, read_sample_deck
-from cg.game import visualize_data
+from src.cg.game import visualize_data
 import pandas as pd
+from src.agents.rule_based_agent import is_rule_based_model_spec
+from src.bot_loader import load_bot
+from src.arena_core import atomic_write_json
 
 def read_deck(deck_path):
     if not deck_path or not os.path.exists(deck_path):
@@ -26,25 +29,10 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
     
     env = PokemonTCGEnv(my_deck=deck_a, opponent_deck=deck_b, opponent_model_path=model_b_path)
     
-    from src.custom_ppo import CustomPPO
-    def load_model_smart(path, env=None):
-        try:
-            return CustomPPO.load(path, env=env)
-        except Exception as e:
-            if env:
-                try:
-                    return PPO.load(path, env=env)
-                except Exception:
-                    pass
-            try:
-                return CustomPPO.load(path)
-            except Exception:
-                return PPO.load(path)
-            
     model = None
     if model_a_path and os.path.exists(model_a_path):
         print(f"Loading {model_a_path}...")
-        model = load_model_smart(model_a_path, env=env)
+        model = load_bot(model_a_path, env=env)
         print("Model loaded successfully.")
     else:
         print("Model not found! Generating replay using random actions instead.")
@@ -102,11 +90,9 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
                         except: pass
                     data[0]["metadata"] = {"p0_name": deck_name_a, "p1_name": deck_name_b}
                     # print(f"Writing {len(json_data)} bytes...")
-                    with open(out_path, "w") as f:
-                        json.dump(data, f)
+                    atomic_write_json(out_path, data)
                 else:
-                    with open(out_path, "w") as f:
-                        f.write(json_data)
+                    atomic_write_json(out_path, data)
             except Exception as e:
                 print("Error extracting data:", e)
                 
@@ -139,11 +125,9 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
                 except: pass
             
             data[0]["metadata"] = {"p0_name": deck_name_a, "p1_name": deck_name_b}
-            with open(out_path, "w") as f:
-                json.dump(data, f)
+            atomic_write_json(out_path, data)
         else:
-            with open(out_path, "w") as f:
-                f.write(json_data)
+            atomic_write_json(out_path, data)
     except Exception:
         pass
         
