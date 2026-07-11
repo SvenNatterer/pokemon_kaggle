@@ -5,19 +5,19 @@ cd "$(dirname "$0")/.." || exit 1
 if [[ $# -gt 0 ]]; then
   DECK_NUM="$1"
   MODEL_FILE=""
-  for candidate in "models/ppo_belief_deck_${DECK_NUM}.zip" "models/ppo_v4_deck_${DECK_NUM}.zip" "models/ppo_deck_${DECK_NUM}.zip"; do
+  for candidate in "models/ppo_v5_deck_${DECK_NUM}.zip" "models/ppo_belief_deck_${DECK_NUM}.zip" "models/ppo_v4_deck_${DECK_NUM}.zip" "models/ppo_deck_${DECK_NUM}.zip"; do
     if [[ -f "$candidate" ]]; then
       MODEL_FILE="$candidate"
       break
     fi
   done
 else
-  MODEL_FILE=$({ ls -t models/ppo_belief_deck_*.zip models/ppo_v4_deck_*.zip models/ppo_deck_*.zip 2>/dev/null || true; } | head -n 1)
+  MODEL_FILE=$({ ls -t models/ppo_v5_deck_*.zip models/ppo_belief_deck_*.zip models/ppo_v4_deck_*.zip models/ppo_deck_*.zip 2>/dev/null || true; } | head -n 1)
   if [[ -z "$MODEL_FILE" ]]; then
-    echo "No models/ppo_belief_deck_*.zip, models/ppo_v4_deck_*.zip, or models/ppo_deck_*.zip model found." >&2
+    echo "No supported ppo_v5/ppo_belief/ppo_v4/ppo model found." >&2
     exit 1
   fi
-  DECK_NUM=$(basename "$MODEL_FILE" .zip | sed -E 's/^ppo(_v4|_belief)?_deck_//')
+  DECK_NUM=$(basename "$MODEL_FILE" .zip | sed -E 's/^ppo(_v4|_v5|_belief)?_deck_//')
 fi
 
 if [[ "$DECK_NUM" == bank_* ]]; then

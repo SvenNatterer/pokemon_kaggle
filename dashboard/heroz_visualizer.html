@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+    <title>HERoz Visualizer</title>
+    <style>
+        :root {
+            --heroz-width: 1920px;
+        }
+
+        html,
+        body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            overflow: hidden;
+            background: #8bc878;
+        }
+
+        #stage {
+            width: var(--heroz-width);
+            transform-origin: top left;
+        }
+
+        #visualizer {
+            display: block;
+            width: var(--heroz-width);
+            border: 0;
+            background: #8bc878;
+        }
+
+        #loading {
+            position: fixed;
+            inset: 0;
+            display: grid;
+            place-items: center;
+            color: #18311a;
+            font: 600 16px Georgia, serif;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">Loading HERoz replay...</div>
+    <div id="stage" hidden>
+        <iframe id="visualizer" name="heroz-replay-frame" title="HERoz replay visualizer"></iframe>
+    </div>
+
+    <script>
+        const HEROZ_WIDTH = 1920;
+        const stage = document.getElementById('stage');
+        const frame = document.getElementById('visualizer');
+        const loading = document.getElementById('loading');
+        let submitted = false;
+
+        function fitVisualizer() {
+            const scale = Math.min(1, window.innerWidth / HEROZ_WIDTH);
+            stage.style.transform = `scale(${scale})`;
+            frame.style.height = `${Math.ceil(window.innerHeight / scale)}px`;
+        }
+
+        function submitReplay(replayJson) {
+            if (submitted) return;
+            submitted = true;
+
+            const form = document.createElement('form');
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'json';
+            input.value = replayJson;
+
+            form.method = 'POST';
+            form.enctype = 'application/x-www-form-urlencoded';
+            form.acceptCharset = 'UTF-8';
+            form.action = 'https://ptcgvis.heroz.jp/Visualizer/Replay/0';
+            form.target = frame.name;
+            form.appendChild(input);
+            document.body.appendChild(form);
+
+            fitVisualizer();
+            stage.hidden = false;
+            loading.hidden = true;
+            form.submit();
+            form.remove();
+        }
+
+        window.addEventListener('message', event => {
+            if (event.origin !== window.location.origin || event.source !== window.opener) return;
+            if (event.data?.type !== 'heroz-replay' || typeof event.data.replayJson !== 'string') return;
+            submitReplay(event.data.replayJson);
+        });
+
+        window.addEventListener('resize', fitVisualizer);
+        fitVisualizer();
+    </script>
+</body>
+</html>

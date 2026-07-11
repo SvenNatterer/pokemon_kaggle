@@ -3,9 +3,7 @@ import sys
 import argparse
 import signal
 import time
-import glob
 import pandas as pd
-import zipfile
 
 # Add src to pythonpath so imports work
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -17,43 +15,7 @@ if "WANDB_MODE" not in os.environ:
     os.environ["WANDB_MODE"] = "online"
 import wandb
 from wandb.integration.sb3 import WandbCallback
-
-CHECKPOINT_JSON_DIRNAME = "json"
-MODEL_BACKUP_DIRNAME = "backup"
-
-def checkpoint_metadata_path(base_path):
-    normalized = os.path.normpath(base_path)
-    parts = normalized.split(os.sep)
-    if "models" in parts:
-        model_index = parts.index("models")
-        model_root = os.sep.join(parts[:model_index + 1])
-        directory = os.path.join(model_root, CHECKPOINT_JSON_DIRNAME)
-    else:
-        directory = os.path.join(os.path.dirname(base_path) or ".", CHECKPOINT_JSON_DIRNAME)
-    filename = f"{os.path.basename(base_path)}_checkpoints.json"
-    return os.path.join(directory, filename)
-
-def adjacent_checkpoint_metadata_path(base_path):
-    directory = os.path.dirname(base_path) or "."
-    filename = f"{os.path.basename(base_path)}_checkpoints.json"
-    return os.path.join(directory, CHECKPOINT_JSON_DIRNAME, filename)
-
-def legacy_checkpoint_metadata_path(base_path):
-    return f"{base_path}_checkpoints.json"
-
-def checkpoint_metadata_candidates(base_path):
-    paths = [
-        checkpoint_metadata_path(base_path),
-        adjacent_checkpoint_metadata_path(base_path),
-        legacy_checkpoint_metadata_path(base_path),
-    ]
-    unique = []
-    seen = set()
-    for path in paths:
-        if path not in seen:
-            unique.append(path)
-            seen.add(path)
-    return unique
+from src.agents.rule_based_agent import is_rule_based_model_spec
 
 class LiveStatusCallback(BaseCallback):
     def __init__(self, action_text, total_timesteps, status_freq=10000, verbose=0):
@@ -104,82 +66,10 @@ class RewardBreakdownCallback(BaseCallback):
         return True
 
     def _on_rollout_end(self) -> None:
-        for key, queue in self.episode_rewards.items():
-            if len(queue) > 0:
-                mean_val = sum(queue) / len(queue)
+        for key, recent_values in self.episode_rewards.items():
+            if len(recent_values) > 0:
+                mean_val = sum(recent_values) / len(recent_values)
                 self.logger.record(f"rewards/{key}", mean_val)
-
-class RotatingCheckpointCallback(BaseCallback):
-    def __init__(self, model_path, save_freq=250000, keep=2, verbose=0):
-        super().__init__(verbose)
-        self.model_path = model_path
-        self.save_freq = int(save_freq)
-        self.keep = max(1, int(keep))
-        self.next_checkpoint = self.save_freq
-
-    def _init_callback(self) -> None:
-        if self.save_freq <= 0:
-            return
-        completed = int(getattr(self.model, "num_timesteps", 0))
-        self.next_checkpoint = ((completed // self.save_freq) + 1) * self.save_freq
-        directory = os.path.dirname(self.model_path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
-
-    def _checkpoint_path(self, slot):
-        return f"{self.model_path}_checkpoint_{slot}"
-
-    def _metadata_path(self):
-        return checkpoint_metadata_path(self.model_path)
-
-    def _write_metadata(self, slot, checkpoint_file):
-        metadata_path = self._metadata_path()
-        metadata = {}
-        for existing_path in checkpoint_metadata_candidates(self.model_path):
-            if not os.path.exists(existing_path):
-                continue
-            try:
-                with open(existing_path, "r") as f:
-                    metadata = json.load(f)
-                break
-            except Exception:
-                metadata = {}
-
-        slots = metadata.get("slots", {})
-        slots[str(slot)] = {
-            "file": checkpoint_file,
-            "step": int(self.num_timesteps),
-            "saved_at": int(time.time()),
-        }
-
-        metadata.update({
-            "latest": checkpoint_file,
-            "latest_slot": slot,
-            "latest_step": int(self.num_timesteps),
-            "checkpoint_interval": self.save_freq,
-            "keep_checkpoints": self.keep,
-            "slots": slots,
-        })
-        metadata_dir = os.path.dirname(metadata_path)
-        if metadata_dir:
-            os.makedirs(metadata_dir, exist_ok=True)
-        with open(metadata_path, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-    def _on_step(self) -> bool:
-        if self.save_freq <= 0:
-            return True
-
-        while self.num_timesteps >= self.next_checkpoint:
-            checkpoint_number = self.next_checkpoint // self.save_freq
-            slot = ((checkpoint_number - 1) % self.keep) + 1
-            checkpoint_path = self._checkpoint_path(slot)
-            self.model.save(checkpoint_path)
-            checkpoint_file = f"{checkpoint_path}.zip"
-            self._write_metadata(slot, checkpoint_file)
-            print(f"Checkpoint saved at {self.num_timesteps} steps: {checkpoint_file}")
-            self.next_checkpoint += self.save_freq
-        return True
 
 from stable_baselines3.common.monitor import Monitor
 from src.env_wrapper import PokemonTCGEnv
@@ -195,115 +85,20 @@ def resolve_model_path(model_name):
         model_path = model_path[:-4]
     return model_path
 
-def resolve_legacy_model_path(model_name):
-    if not os.path.dirname(model_name):
-        return None
-    legacy_path = os.path.join("models", model_name)
-    if legacy_path.endswith(".zip"):
-        legacy_path = legacy_path[:-4]
-    return legacy_path
 
-def normalize_zip_path(path):
-    return path if path.endswith(".zip") else f"{path}.zip"
-
-def model_file_candidates(zip_path):
-    zip_path = normalize_zip_path(zip_path)
-    paths = [zip_path]
-
-    normalized = os.path.normpath(zip_path)
-    parts = normalized.split(os.sep)
-    if "models" in parts:
-        model_index = parts.index("models")
-        model_root = os.sep.join(parts[:model_index + 1])
-        paths.append(os.path.join(model_root, MODEL_BACKUP_DIRNAME, os.path.basename(zip_path)))
-
-    unique = []
-    seen = set()
-    for path in paths:
-        if path not in seen:
-            unique.append(path)
-            seen.add(path)
-    return unique
-
-def read_model_timesteps(zip_path):
+def save_final_model_atomically(model, model_path):
+    """Save exactly one final target model without exposing a partial ZIP."""
+    directory = os.path.dirname(model_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    temporary_base = os.path.join(directory, f".{os.path.basename(model_path)}.training-{os.getpid()}")
+    temporary_zip = f"{temporary_base}.zip"
+    save_model = False
     try:
-        with zipfile.ZipFile(zip_path) as archive:
-            if "data" not in archive.namelist():
-                return None
-            data = json.loads(archive.read("data").decode("utf-8"))
-        value = data.get("num_timesteps")
-        return int(value) if value is not None else None
-    except Exception:
-        return None
-
-def add_model_candidate(candidates, zip_path, label, step_hint=None):
-    zip_path = next((path for path in model_file_candidates(zip_path) if os.path.exists(path)), normalize_zip_path(zip_path))
-    if zip_path in candidates or not os.path.exists(zip_path):
-        return
-
-    steps = read_model_timesteps(zip_path)
-    if steps is None and step_hint is not None:
-        try:
-            steps = int(step_hint)
-        except Exception:
-            steps = None
-
-    candidates[zip_path] = {
-        "path": zip_path[:-4] if zip_path.endswith(".zip") else zip_path,
-        "zip_path": zip_path,
-        "label": label,
-        "steps": steps,
-        "mtime": os.path.getmtime(zip_path),
-    }
-
-def add_checkpoint_candidates(candidates, base_path, label_prefix):
-    for metadata_path in checkpoint_metadata_candidates(base_path):
-        if not os.path.exists(metadata_path):
-            continue
-        try:
-            with open(metadata_path, "r") as f:
-                metadata = json.load(f)
-
-            latest = metadata.get("latest")
-            if latest:
-                add_model_candidate(candidates, latest, f"{label_prefix} latest checkpoint", metadata.get("latest_step"))
-
-            for slot, slot_data in metadata.get("slots", {}).items():
-                if isinstance(slot_data, dict) and slot_data.get("file"):
-                    add_model_candidate(
-                        candidates,
-                        slot_data["file"],
-                        f"{label_prefix} checkpoint slot {slot}",
-                        slot_data.get("step"),
-                    )
-        except Exception as e:
-            print(f"Warning: Failed to read checkpoint metadata {metadata_path}: {e}")
-
-    for checkpoint_path in glob.glob(f"{base_path}_checkpoint_*.zip"):
-        add_model_candidate(candidates, checkpoint_path, f"{label_prefix} checkpoint file")
-
-def choose_model_to_load(model_path, legacy_model_path=None):
-    candidates = {}
-
-    add_model_candidate(candidates, f"{model_path}.zip", "base model")
-    add_checkpoint_candidates(candidates, model_path, "base")
-
-    if legacy_model_path:
-        add_model_candidate(candidates, f"{legacy_model_path}.zip", "legacy model")
-        add_checkpoint_candidates(candidates, legacy_model_path, "legacy")
-
-    if not candidates:
-        return model_path
-
-    best = max(candidates.values(), key=lambda item: (-1 if item["steps"] is None else item["steps"], item["mtime"]))
-
-    print("Model candidates:")
-    for candidate in sorted(candidates.values(), key=lambda item: (-1 if item["steps"] is None else item["steps"], item["mtime"])):
-        step_text = "unknown" if candidate["steps"] is None else f"{candidate['steps']:,}"
-        print(f"  - {candidate['label']}: {candidate['zip_path']} ({step_text} steps)")
-    print(f"Loading best model candidate: {best['zip_path']}")
-
-    return best["path"]
+        model.save(temporary_base)
+        os.replace(temporary_zip, f"{model_path}.zip")
+    finally:
+        if os.path.exists(temporary_zip):
+            os.unlink(temporary_zip)
 
 def load_opponent_pool(pool_path):
     if not pool_path:
@@ -318,10 +113,10 @@ def load_opponent_pool(pool_path):
         if not isinstance(entry, dict) or not entry.get("deck"):
             raise ValueError(f"Opponent pool entry {index} needs a deck path")
         deck_path = entry["deck"]
-        model_path = entry.get("model")
+        model_path = entry.get("model") or entry.get("model_path") or entry.get("policy")
         if not os.path.exists(deck_path):
             raise FileNotFoundError(f"Opponent deck not found: {deck_path}")
-        if model_path and not os.path.exists(model_path):
+        if model_path and not is_rule_based_model_spec(model_path) and not os.path.exists(model_path):
             raise FileNotFoundError(f"Opponent model not found: {model_path}")
         pool.append({
             "deck": read_deck(deck_path),
@@ -354,8 +149,9 @@ def train():
     parser.add_argument("--model-name", type=str, required=True, help="Name of the model to save")
     parser.add_argument("--timesteps", type=int, default=0, help="Number of training timesteps. Use 0 for endless training.")
     parser.add_argument("--endless", action="store_true", help="Train forever until interrupted.")
-    parser.add_argument("--checkpoint-interval", type=int, default=250000, help="Save a rotating checkpoint every N timesteps")
-    parser.add_argument("--keep-checkpoints", type=int, default=2, help="Number of rotating checkpoint files to keep")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--continue-existing", action="store_true", help="Explicitly continue the exact target model if it exists.")
+    mode.add_argument("--overwrite", action="store_true", help="Train a new model and replace an existing target only after success.")
     parser.add_argument("--opp-deck", type=str, help="Path to opponent deck.csv", default=None)
     parser.add_argument("--opp-model", type=str, help="Path to opponent model .zip", default=None)
     parser.add_argument("--opp-pool", type=str, default=None, help="JSON list of weighted opponent deck/model entries sampled per episode")
@@ -377,6 +173,15 @@ def train():
     args = parser.parse_args()
 
     opp_deck_path = args.opp_deck if args.opp_deck else args.deck
+    from scripts.check_holdout_safe import check_paths
+    holdout_file = "decks/holdout_opponents.json"
+    if os.path.exists(holdout_file):
+        check_paths(
+            holdout_file,
+            [opp_deck_path],
+            [args.opp_model] if args.opp_model else [],
+            [args.opp_pool] if args.opp_pool else [],
+        )
     opponent_pool = load_opponent_pool(args.opp_pool)
     
     opponent_description = f"pool {args.opp_pool}" if opponent_pool else opp_deck_path
@@ -396,26 +201,42 @@ def train():
     
     model_path = resolve_model_path(args.model_name)
 
-    legacy_model_path = resolve_legacy_model_path(args.model_name)
-    load_model_path = choose_model_to_load(model_path, legacy_model_path)
+    target_exists = os.path.exists(f"{model_path}.zip")
+    if target_exists and not args.continue_existing and not args.overwrite:
+        env.close()
+        raise FileExistsError(
+            f"Target model already exists: {model_path}.zip. Use --continue-existing to continue that exact "
+            "final model or --overwrite to deliberately train a new replacement."
+        )
+    if args.continue_existing and not target_exists:
+        env.close()
+        raise FileNotFoundError(f"Cannot continue missing target model: {model_path}.zip")
 
-    if os.path.exists(f"{load_model_path}.zip"):
-        print(f"Loading existing model from {load_model_path}.zip...")
-        model = CustomPPO.load(load_model_path, env=env)
+    if args.continue_existing:
+        print(f"Explicitly continuing target model {model_path}.zip...")
+        model = CustomPPO.load(model_path, device="cpu")
+        if not bool(getattr(model.policy.features_extractor, "structured_v2", False)):
+            env.close()
+            raise RuntimeError(
+                f"Model {model_path}.zip uses the legacy scalar-card observation and "
+                "cannot be resumed as Observation V2. Keep it as an --opp-model and choose a "
+                "fresh --model-name such as models/ppo_v5_deck_<id>.zip."
+            )
+        model.set_env(env)
         loaded_n_steps = int(getattr(model, "n_steps", args.n_steps))
         if loaded_n_steps != args.n_steps:
             raise RuntimeError(
-                f"Cannot resume with --n-steps={args.n_steps}: checkpoint rollout buffer "
+                f"Cannot continue with --n-steps={args.n_steps}: saved rollout buffer "
                 f"uses n_steps={loaded_n_steps}. Keep the saved value or start a fresh model."
             )
         loaded_belief_actor = bool(getattr(model.policy, "use_belief_actor", False))
         if args.belief_actor and not loaded_belief_actor:
             raise RuntimeError(
-                "--belief-actor was requested, but the existing checkpoint uses the legacy actor. "
+                "--belief-actor was requested, but the existing model uses the legacy actor. "
                 "Use a fresh --model-name for the belief-actor experiment."
             )
         if loaded_belief_actor and not args.belief_actor:
-            print("Loaded a belief-actor checkpoint; continuing with its saved architecture.")
+            print("Loaded a belief-actor model; continuing with its saved architecture.")
         # Update parameters on loaded model
         model.c_aux = args.aux_coef
         model.ent_coef = args.ent_coef
@@ -460,7 +281,7 @@ def train():
     
     endless_training = args.endless or args.timesteps <= 0
     if endless_training:
-        print(f"Starting endless training. Rotating checkpoints every {args.checkpoint_interval} steps...")
+        print("Starting endless training without periodic saves; interrupt gracefully to save the target model.")
     else:
         print(f"Starting training for {args.timesteps} timesteps...")
 
@@ -500,17 +321,12 @@ def train():
     
     status_total = 0 if endless_training else args.timesteps
     live_status_callback = LiveStatusCallback(action_text=action_text, total_timesteps=status_total)
-    checkpoint_callback = RotatingCheckpointCallback(
-        model_path=model_path,
-        save_freq=args.checkpoint_interval,
-        keep=args.keep_checkpoints,
-    )
     wandb_callback = WandbCallback(
         gradient_save_freq=0, # disable saving gradients to save space
         verbose=2,
     )
     reward_callback = RewardBreakdownCallback()
-    callbacks = CallbackList([live_status_callback, checkpoint_callback, wandb_callback, reward_callback])
+    callbacks = CallbackList([live_status_callback, wandb_callback, reward_callback])
 
     def handle_stop_signal(signum, frame):
         raise KeyboardInterrupt
@@ -520,10 +336,9 @@ def train():
 
     try:
         if endless_training:
-            learn_chunk = max(1, args.checkpoint_interval)
             while True:
                 model.learn(
-                    total_timesteps=learn_chunk,
+                    total_timesteps=max(1, args.n_steps * args.num_envs),
                     callback=callbacks,
                     tb_log_name=tb_log_name,
                     reset_num_timesteps=False,
@@ -536,11 +351,14 @@ def train():
                 reset_num_timesteps=False,
             )
         print("Training finished! Saving model...")
+        save_model = True
     except KeyboardInterrupt:
         print("Training interrupted. Saving current model before shutdown...")
+        save_model = True
     finally:
-        model.save(model_path)
-        print(f"Model saved to {model_path}.zip")
+        if save_model:
+            save_final_model_atomically(model, model_path)
+            print(f"Model saved to {model_path}.zip")
         try:
             env.close()
         except Exception:

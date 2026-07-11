@@ -6,6 +6,8 @@ __pycache__/
 *.log
 logs/
 wandb/
+arena_data/
+server_train.log
 
 # Models and large files
 models/

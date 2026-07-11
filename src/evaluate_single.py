@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.tournament import evaluate_vs_baseline, evaluate_vs_opponent
@@ -13,8 +14,10 @@ if __name__ == "__main__":
         num_games = int(sys.argv[5])
         
         try:
-            wins, losses, draws, pw1, dw1, bw1, pw2, dw2, bw2 = evaluate_vs_opponent(model_a, deck_a, model_b, deck_b, num_games)
+            result, details = evaluate_vs_opponent(model_a, deck_a, model_b, deck_b, num_games, return_details=True)
+            wins, losses, draws, pw1, dw1, bw1, pw2, dw2, bw2 = result
             print(f"RESULT:{wins},{losses},{draws},{pw1},{dw1},{bw1},{pw2},{dw2},{bw2}")
+            print(f"DETAIL:{json.dumps(details, sort_keys=True)}")
         except Exception as e:
             print(f"CHILD ERROR: {e}")
     else:

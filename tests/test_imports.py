@@ -1,43 +1,26 @@
-import sys
 import os
+from pathlib import Path
+import subprocess
+import sys
+import unittest
 
-sys.path.insert(0, os.path.abspath('tests/test_sub'))
-import main
 
-print("Imports successful!")
-# Test if we can initialize the model without Kaggle env crashing
-try:
-    # Set model to None to force reload
-    main.model = None
-    
-    obs_dict_1 = {
-        'step': 1,
-        'select': {
-            'option': [{'id': 'test', 'count': 1, 'type': 1}],
-            'maxCount': 1,
-            'minCount': 1
-        },
-        'current': {
-            'yourIndex': 0,
-            'turn': 0,
-            'active': [],
-            'bench': [],
-            'hand': [],
-            'discard': [],
-            'stadium': None,
-            'prizes': 6,
-            'opp_active': [],
-            'opp_bench': [],
-            'opp_hand_size': 0,
-            'opp_discard': [],
-            'opp_prizes': 6
-        },
-        'logs': [],
-        'remainingOverageTime': 600
-    }
-    
-    # We just want to see if it loads the model successfully and attempts to predict
-    main.agent(obs_dict_1)
-except Exception as e:
-    print(f"Agent threw an expected error because of dummy data, but imports were fine: {type(e).__name__}: {e}")
-print("Test completed.")
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class SubmissionImportTests(unittest.TestCase):
+    def test_packaged_submission_imports_in_isolated_process(self):
+        result = subprocess.run(
+            [sys.executable, "-c", "import main; print('imports ok')"],
+            cwd=ROOT / "tests" / "test_sub",
+            env={**os.environ, "PYTHONPATH": str(ROOT / "tests" / "test_sub")},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        self.assertIn("imports ok", result.stdout)
+
+
+if __name__ == "__main__":
+    unittest.main()

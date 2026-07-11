@@ -2,6 +2,7 @@
 from enum import IntEnum
 import json
 import ctypes
+from functools import lru_cache
 
 from .sim import lib
 from .utils import to_dataclass, json_to_dataclass
@@ -492,19 +493,29 @@ class Attack:
 
 #region functions
 
-def all_card_data() -> list[CardData]:
+@lru_cache(maxsize=1)
+def _cached_card_data() -> tuple[CardData, ...]:
     """Return all cards."""
     bs = lib.AllCard()
     js = bs.decode()
     cards = json.loads(js)
-    return [to_dataclass(v, CardData) for v in cards]
+    return tuple(to_dataclass(v, CardData) for v in cards)
 
-def all_attack() -> list[Attack]:
+
+def all_card_data() -> list[CardData]:
+    return list(_cached_card_data())
+
+@lru_cache(maxsize=1)
+def _cached_attacks() -> tuple[Attack, ...]:
     """Return all attacks."""
     bs = lib.AllAttack()
     js = bs.decode()
     cards = json.loads(js)
-    return [to_dataclass(v, Attack) for v in cards]
+    return tuple(to_dataclass(v, Attack) for v in cards)
+
+
+def all_attack() -> list[Attack]:
+    return list(_cached_attacks())
 
 def to_observation_class(obs: dict) -> Observation:
     """dict to Observation class.
