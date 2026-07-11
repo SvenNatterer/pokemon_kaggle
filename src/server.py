@@ -2,9 +2,16 @@ import os
 import subprocess
 import signal
 import json
-from flask import Flask, jsonify, send_from_directory, request
+import sys
+from urllib.parse import quote
+from flask import Flask, jsonify, redirect, send_from_directory, request
 
-app = Flask(__name__, static_folder="..")
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.append(BASE_DIR)
+
+from src.model_paths import resolve_deck_model_base, resolve_deck_model_path
+
+app = Flask(__name__, static_folder=BASE_DIR)
 
 arena_process = None
 train_process = None
@@ -20,35 +27,27 @@ def is_running():
     return False
 
 def kill_tourney():
-    global arena_process, train_process
-    for p in [arena_process, train_process]:
-        if p is not None and p.poll() is None:
-            p.terminate()
-            try:
-                p.wait(timeout=5)
-            except:
-                p.kill()
+    global arena_process
+    if arena_process is not None and arena_process.poll() is None:
+        arena_process.terminate()
+        try:
+            arena_process.wait(timeout=5)
+        except:
+            arena_process.kill()
     
     arena_process = None
-    train_process = None
     
-    # Also aggressively kill any lingering train.py or evaluate.py processes
-    subprocess.run("pkill -f 'python src/train.py'", shell=True)
+    # Also aggressively kill any lingering evaluate.py or arena processes
     subprocess.run("pkill -f 'python src/evaluate_single.py'", shell=True)
     subprocess.run("pkill -f 'python src/auto_arena.py'", shell=True)
-    subprocess.run("pkill -f 'python src/auto_train.py'", shell=True)
 
 @app.route("/")
 def index():
-    response = send_from_directory("..", "dashboard.html")
-    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '-1'
-    return response
+    return redirect("/dashboard/dashboard.html")
 
 @app.route("/<path:path>")
 def serve_static(path):
-    return send_from_directory("..", path)
+    return send_from_directory(BASE_DIR, path)
 
 @app.route("/api/status", methods=["GET"])
 def status():
@@ -85,7 +84,7 @@ def reset():
     wipe_script = """
     # 1. Nur Stats und Replays löschen
     rm -f decks/*.json
-    rm -f PTCG_ABCS_Visualizer/replays/*.json
+    find replays -name "*.json" -type f -delete
     
     # Keine Modelle mehr aus Backup kopieren!
     
@@ -113,6 +112,80 @@ def get_available_decks():
         decks.append(filename)
     return jsonify({"decks": sorted(decks)})
 
+WATCHED_FILE = os.path.join(BASE_DIR, "decks", "watched_models.json")
+
+@app.route('/api/watched', methods=['GET'])
+def get_watched():
+    try:
+        if os.path.exists(WATCHED_FILE):
+            with open(WATCHED_FILE, 'r') as f:
+                return jsonify(json.load(f))
+    except Exception:
+        pass
+    return jsonify({"watched": []})
+
+@app.route('/api/watched', methods=['POST'])
+def set_watched():
+    data = request.json or {}
+    watched = data.get('watched', [])
+    try:
+        os.makedirs(os.path.dirname(WATCHED_FILE), exist_ok=True)
+        with open(WATCHED_FILE, 'w') as f:
+            json.dump({"watched": watched}, f, indent=2)
+        return jsonify({"success": True, "watched": watched})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/replays', methods=['GET'])
+def get_replays():
+    replay_roots = [
+        ("Arena replays", os.path.join(BASE_DIR, "replays")),
+    ]
+    replays = []
+    seen = set()
+
+    for group, root in replay_roots:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _, filenames in os.walk(root):
+            for filename in filenames:
+                if not filename.endswith(".json"):
+                    continue
+
+                abs_path = os.path.join(dirpath, filename)
+                rel_path = os.path.relpath(abs_path, BASE_DIR).replace(os.sep, "/")
+                if rel_path in seen:
+                    continue
+                seen.add(rel_path)
+
+                metadata = {}
+                snapshots = None
+                try:
+                    with open(abs_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, list):
+                        snapshots = len(data)
+                        if data and isinstance(data[0], dict):
+                            metadata = data[0].get("metadata") or {}
+                except Exception:
+                    pass
+
+                stat = os.stat(abs_path)
+                replay_url = "/" + quote(rel_path, safe="/")
+                replays.append({
+                    "group": group,
+                    "path": rel_path,
+                    "url": replay_url,
+                    "name": filename,
+                    "snapshots": snapshots,
+                    "metadata": metadata,
+                    "size": stat.st_size,
+                    "mtime": stat.st_mtime,
+                })
+
+    replays.sort(key=lambda item: item["mtime"], reverse=True)
+    return jsonify({"replays": replays})
+
 @app.route('/api/train_custom', methods=['POST'])
 def train_custom():
     global process
@@ -123,9 +196,9 @@ def train_custom():
     timesteps = data.get("timesteps", 500000)
     reward_config = data.get("reward_config", {})
     model_title = data.get("model_title", "").strip()
-    algo = data.get("algo", "PPO")
-    ent_start = data.get("ent_start", 0.1)
-    ent_end = data.get("ent_end", 0.01)
+    algo = data.get("algo", "RecurrentPPO")
+    ent_start = data.get("ent_start", 0.02)
+    ent_end = data.get("ent_end", 0.005)
     
     if not learning_deck:
         return jsonify({"error": "learning_deck is required"}), 400
@@ -141,9 +214,9 @@ def train_custom():
         model_title = "".join([c for c in model_title if c.isalnum() or c in ['_', '-']])
         learning_model = f"models/{model_title}"
     else:
-        learning_model = f"models/ppo_deck_{learn_id}"
+        learning_model = resolve_deck_model_base(learn_id)
         
-    opponent_model = f"models/ppo_deck_{opp_id}"
+    opponent_model = resolve_deck_model_path(opp_id) or f"models/ppo_deck_{opp_id}"
     
     global train_process
     

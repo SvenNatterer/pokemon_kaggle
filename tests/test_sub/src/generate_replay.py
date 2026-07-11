@@ -124,7 +124,7 @@ if __name__ == "__main__":
     parser.add_argument("--deck-a", type=str, default="")
     parser.add_argument("--model-b", type=str, default="")
     parser.add_argument("--deck-b", type=str, default="")
-    parser.add_argument("--out", type=str, default="PTCG_ABCS_Visualizer/replay.json")
+    parser.add_argument("--out", type=str, default="replays/replay.json")
     args = parser.parse_args()
     
     out_path = args.out

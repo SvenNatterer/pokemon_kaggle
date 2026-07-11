@@ -1,5 +1,5 @@
 #!/bin/bash
-cd "$(dirname \"$0\")/.." || exit 1
+cd "$(dirname "$0")/.." || exit 1
 source venv/bin/activate
 mkdir -p replays/deck100_vs_deck100
 

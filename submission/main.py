@@ -26,14 +26,17 @@ sys.modules['matplotlib'] = MagicMock()
 sys.modules['matplotlib.pyplot'] = MagicMock()
 
 import torch
+import numpy as np
 torch.set_num_threads(1)
 
 from cg.api import Observation, to_observation_class
 from src.custom_ppo import CustomPPO
-from src.env_wrapper import PokemonTCGEnv, select_action_indices
+from src.env_wrapper import PokemonTCGEnv, STOP_ACTION, advance_selection
 
 model = None
 dummy_env = None
+lstm_state = None
+episode_start = True
 
 def read_deck_csv() -> list[int]:
     """Read deck.csv."""
@@ -50,12 +53,15 @@ def read_deck_csv() -> list[int]:
 
 def agent(obs_dict: dict) -> list[int]:
     """Implement Your Pokémon Trading Card Game Agent."""
-    global model, dummy_env
+    global model, dummy_env, lstm_state, episode_start
     
-    obs: Observation = to_observation_class(obs_dict)
-    if obs.select == None:
+    if obs_dict.get("select") is None:
         # Initial deck selection
+        lstm_state = None
+        episode_start = True
         return read_deck_csv()
+        
+    obs: Observation = to_observation_class(obs_dict)
         
     valid_options = len(obs.select.option) if obs.select and obs.select.option else 0
     
@@ -78,20 +84,40 @@ def agent(obs_dict: dict) -> list[int]:
         
     dummy_env.current_obs_dict = obs_dict
     perspective = obs.current.yourIndex if obs.current else 0
-    formatted_obs = dummy_env._get_obs(perspective=perspective)
-    
-    try:
-        action, _ = model.predict(formatted_obs, deterministic=True)
-        action = int(action.item())
-    except Exception as e:
-        print(f"Error predicting action: {e}", file=sys.stderr)
-        action = None # Deterministic heuristic fallback
+    pending = []
+    max_count = min(valid_options, max(0, int(obs.select.maxCount or 0)))
 
-    action_list = select_action_indices(
-        obs,
-        action,
-        perspective=perspective,
-        allow_policy_override=True,
-    )
-        
-    return [int(x) for x in action_list]
+    for _ in range(max_count + 1):
+        formatted_obs = dummy_env._get_obs(
+            perspective=perspective,
+            pending_selection=pending,
+        )
+        try:
+            action, lstm_state = model.predict(
+                formatted_obs,
+                state=lstm_state,
+                episode_start=np.array([episode_start], dtype=bool),
+                deterministic=True,
+            )
+            episode_start = False
+            action = int(np.asarray(action).item())
+        except Exception as e:
+            print(f"Error predicting action: {e}", file=sys.stderr)
+            action = STOP_ACTION if len(pending) >= int(obs.select.minCount or 0) else 0
+
+        pending, committed, invalid = advance_selection(obs, action, pending)
+        if invalid:
+            legal = [index for index in range(valid_options) if index not in pending]
+            fallback_action = legal[0] if legal else STOP_ACTION
+            pending, committed, _ = advance_selection(obs, fallback_action, pending)
+        if committed:
+            return [int(index) for index in pending]
+
+    # Defensive fallback for malformed selection metadata.
+    min_count = min(valid_options, max(0, int(obs.select.minCount or 0)))
+    for index in range(valid_options):
+        if len(pending) >= min_count:
+            break
+        if index not in pending:
+            pending.append(index)
+    return [int(index) for index in pending]

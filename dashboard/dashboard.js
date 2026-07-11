@@ -1,8 +1,45 @@
 let deckNames = {};
 let activeDecks = [];
+let watchedModels = new Set();
+
+async function loadWatched() {
+    try {
+        const res = await fetch('/api/watched');
+        if (res.ok) {
+            const data = await res.json();
+            watchedModels = new Set(data.watched || []);
+        }
+    } catch(e) { console.warn('Could not load watched models'); }
+}
+
+async function toggleWatch(modelName) {
+    if (watchedModels.has(modelName)) {
+        watchedModels.delete(modelName);
+    } else {
+        watchedModels.add(modelName);
+    }
+    try {
+        await fetch('/api/watched', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ watched: Array.from(watchedModels) })
+        });
+    } catch(e) { console.warn('Could not save watched models'); }
+    // Re-render only the eye buttons without full refresh
+    document.querySelectorAll('.watch-btn').forEach(btn => {
+        const m = btn.dataset.model;
+        const active = watchedModels.has(m);
+        btn.textContent = active ? '\ud83d\udc41' : '\ud83d\udc41\ufe0e';
+        btn.title = active ? 'Beobachtung aktiv – Replays werden generiert' : 'Klicken zum Beobachten';
+        btn.style.opacity = active ? '1' : '0.25';
+        btn.style.filter = active ? 'none' : 'grayscale(1)';
+        btn.style.transform = active ? 'scale(1.2)' : 'scale(1)';
+    });
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
     try {
+        await loadWatched();
         try {
             const nameRes = await fetch('/decks/deck_names.json');
             if (nameRes.ok) {
@@ -20,25 +57,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Render Roster immediately
         renderRoster(deckNames);
 
-        // Start live status polling immediately
-        setInterval(fetchStatus, 2000);
-        fetchStatus();
-
-        // Load available decks for training config
-        try {
-            const decksRes = await fetch('/api/available_decks');
-            if (decksRes.ok) {
-                const decksData = await decksRes.json();
-                const learningSelect = document.getElementById('train-learning-deck');
-                const oppSelect = document.getElementById('train-opponent-deck');
-                decksData.decks.forEach(d => {
-                    const deckId = d.replace('.csv', '');
-                    const label = deckNames[deckId] ? `${deckNames[deckId]} (${deckId})` : d;
-                    learningSelect.innerHTML += `<option value="${d}">${label}</option>`;
-                    oppSelect.innerHTML += `<option value="${d}">${label}</option>`;
-                });
-            }
-        } catch(e) { console.warn('Could not load available decks'); }
+        loadReplays();
+        const replayRefresh = document.getElementById('replay-refresh');
+        if (replayRefresh) {
+            replayRefresh.addEventListener('click', loadReplays);
+        }
 
         const response = await fetch('/decks/pairwise_winrates.json');
         if (!response.ok) throw new Error('Data not found');
@@ -169,92 +192,90 @@ function renderDashboard(data, currentData, eloRatings) {
 
     const deckList = Array.from(decks).sort((a,b) => {
         // Natural sort for deck names
-        const numA = parseInt(a.replace(/\D/g, '')) || 0;
-        const numB = parseInt(b.replace(/\D/g, '')) || 0;
-        return numA - numB;
+        const numA = parseInt(a.replace(/\\D/g, '')) || 0;
+        const numB = parseInt(b.replace(/\\D/g, '')) || 0;
+        if (numA !== numB) return numA - numB;
+        return a.localeCompare(b);
     });
     
     // 1. Render Leaderboard
     const leaderboard = deckList.map(deck => {
         const deckStats = stats[deck];
         const winrate = deckStats.total > 0 ? (deckStats.wins / deckStats.total) * 100 : 0;
-        const id = deck.replace(/\D/g, '');
-        const elo = eloRatings && eloRatings[id] ? eloRatings[id] : 1200.0;
+        const elo = eloRatings && eloRatings[deck] ? eloRatings[deck] : 1200.0;
         return { name: deck, ...deckStats, winrate, elo };
+    }).filter(deck => {
+        const isEliminated = activeDecks.length > 0 && !activeDecks.includes(deck.name);
+        return !isEliminated; // Hide them completely
     }).sort((a, b) => b.elo - a.elo);
 
     const tbody = document.getElementById('leaderboard-body');
     tbody.innerHTML = leaderboard.map((deck, index) => {
-        const id = deck.name.replace(/\D/g, '');
-        const isEliminated = activeDecks.length > 0 && !activeDecks.includes(id);
-        const elimBadge = isEliminated ? ` <span style="font-size: 0.75rem; color: #f43f5e; background: rgba(244,63,94,0.1); padding: 2px 6px; border-radius: 4px; margin-left: 8px; font-weight: normal;">Eliminiert 👻</span>` : '';
-        const opacity = isEliminated ? '0.5' : '1';
+        const alias = formatName(deck.name);
+        const opacity = '1';
+        const elimBadge = '';
+        
+        const totalWins = deck.pw + deck.bw + deck.dw;
+        const pwPct = totalWins > 0 ? (deck.pw / totalWins) * 100 : 33.3;
+        const bwPct = totalWins > 0 ? (deck.bw / totalWins) * 100 : 33.3;
+        const dwPct = totalWins > 0 ? (deck.dw / totalWins) * 100 : 33.3;
         
         return `
         <tr style="opacity: ${opacity};">
             <td>#${index + 1}</td>
-            <td><strong>${formatName(deck.name)}</strong>${elimBadge}</td>
+            <td contenteditable="true" class="editable-name" data-model="${deck.name}" style="border: 1px dashed rgba(255,255,255,0.2); border-radius: 4px; padding: 4px 8px; cursor: text; outline: none; transition: border-color 0.2s;" onblur="saveAlias(this)" onfocus="window.isEditing = true; this.style.borderColor='var(--accent-1)'"><strong>${alias}</strong>${elimBadge}</td>
+            <td style="font-family: monospace; font-size: 0.85em; opacity: 0.7;">${deck.name}</td>
             <td style="font-weight: bold; color: #f59e0b;">${Math.round(deck.elo)}</td>
             <td>
                 ${deck.winrate.toFixed(1)}%
                 <div class="winrate-bar"><div class="winrate-fill" style="width: ${deck.winrate}%"></div></div>
             </td>
             <td style="color:var(--text-muted)">${deck.total} matches</td>
-            <td style="color:var(--text-muted); font-size: 0.9em;">
-                <span title="Prize Wins">🏆 P-Win: <span style="color:#10b981">${deck.pw}</span></span> | 
-                <span title="Bench-Out Wins">🪑 B-Win: <span style="color:#10b981">${deck.bw}</span></span> | 
-                <span title="Deck-Out Losses">🎴 D-Loss: <span style="color:#f43f5e">${deck.dl}</span></span>
+            <td style="min-width: 200px; vertical-align: middle;">
+                <div style="display: flex; gap: 1rem; justify-content: space-between; font-size: 0.85em; font-weight: 600; padding: 0 4px;">
+                    <span title="Prize Cards 🏆" style="color: #10b981;">${deck.pw} 🏆</span>
+                    <span title="Bench-Out 🪑" style="color: #38bdf8;">${deck.bw} 🪑</span>
+                    <span title="Deck-Out 🚫" style="color: #f43f5e;">${deck.dw} 🚫</span>
+                </div>
+                <div style="margin-top: 6px; height: 6px; width: 100%; background: rgba(255,255,255,0.05); border-radius: 3px; display: flex; overflow: hidden;">
+                    <div style="width: ${pwPct}%; background: #10b981;"></div>
+                    <div style="width: ${bwPct}%; background: #38bdf8;"></div>
+                    <div style="width: ${dwPct}%; background: #f43f5e;"></div>
+                </div>
+            </td>
+            <td style="text-align:center; vertical-align:middle;">
+                <button class="watch-btn" data-model="${deck.name}"
+                    onclick="toggleWatch('${deck.name}')"
+                    title="${watchedModels.has(deck.name) ? 'Beobachtung aktiv – Replays werden generiert' : 'Klicken zum Beobachten'}"
+                    style="background:none; border:none; cursor:pointer; font-size:1.3em; transition: all 0.2s;
+                           opacity:${watchedModels.has(deck.name) ? '1' : '0.25'};
+                           filter:${watchedModels.has(deck.name) ? 'none' : 'grayscale(1)'};
+                           transform:${watchedModels.has(deck.name) ? 'scale(1.2)' : 'scale(1)'};"
+                >👁</button>
             </td>
         </tr>
         `;
     }).join('');
 
-    // 1.5 Render Win Conditions
-    let totalPw = 0;
-    let totalDw = 0;
-    let totalBw = 0;
-    if (currentData) {
-        const currProcessedPairs = new Set();
-        for (const deckA in currentData) {
-            for (const deckB in currentData[deckA]) {
-                const pairId = [deckA, deckB].sort().join('-');
-                if (!currProcessedPairs.has(pairId)) {
-                    currProcessedPairs.add(pairId);
-                    const cd = currentData[deckA][deckB];
-                    totalPw += (cd[2] || 0) + (cd[5] || 0);
-                    totalDw += (cd[3] || 0) + (cd[6] || 0);
-                    totalBw += (cd[7] || 0) + (cd[8] || 0);
-                }
-            }
-        }
-    }
-    
-    const pwEl = document.getElementById('stat-prize-wins');
-    const dwEl = document.getElementById('stat-deckout-wins');
-    const bwEl = document.getElementById('stat-bench-wins');
-    if (pwEl && dwEl && bwEl) {
-        pwEl.innerText = totalPw;
-        dwEl.innerText = totalDw;
-        bwEl.innerText = totalBw;
-        const totalWins = totalPw + totalDw + totalBw;
-        if (totalWins > 0) {
-            document.getElementById('stat-bar-prize').style.width = `${(totalPw / totalWins) * 100}%`;
-            document.getElementById('stat-bar-bench').style.width = `${(totalBw / totalWins) * 100}%`;
-            document.getElementById('stat-bar-deckout').style.width = `${(totalDw / totalWins) * 100}%`;
-        } else {
-            document.getElementById('stat-bar-prize').style.width = `33.3%`;
-            document.getElementById('stat-bar-bench').style.width = `33.3%`;
-            document.getElementById('stat-bar-deckout').style.width = `33.3%`;
-        }
-    }
+
 
     // 2. Render Heatmap
     const container = document.getElementById('heatmap-container');
     let heatmapDecks = [];
-    if (currentData && Object.keys(currentData).length > 0) {
-        heatmapDecks = Object.keys(currentData).sort((a,b)=>parseInt(a)-parseInt(b));
-    } else if (activeDecks.length > 0) {
-        heatmapDecks = [...activeDecks].sort((a,b)=>parseInt(a)-parseInt(b));
+    if (activeDecks.length > 0) {
+        heatmapDecks = [...activeDecks].sort((a,b)=>{
+            const numA = parseInt(a.replace(/\D/g, '')) || 0;
+            const numB = parseInt(b.replace(/\D/g, '')) || 0;
+            if (numA !== numB) return numA - numB;
+            return a.localeCompare(b);
+        });
+    } else if (currentData && Object.keys(currentData).length > 0) {
+        heatmapDecks = Object.keys(currentData).sort((a,b)=>{
+            const numA = parseInt(a.replace(/\D/g, '')) || 0;
+            const numB = parseInt(b.replace(/\D/g, '')) || 0;
+            if (numA !== numB) return numA - numB;
+            return a.localeCompare(b);
+        });
     } else {
         heatmapDecks = deckList;
     }
@@ -275,9 +296,7 @@ function renderDashboard(data, currentData, eloRatings) {
             const idxA = heatmapDecks.indexOf(deckA);
             const idxB = heatmapDecks.indexOf(deckB);
             
-            if (idxA > idxB) {
-                html += `<div class="heatmap-cell" style="background: transparent;"></div>`;
-            } else if (deckA === deckB) {
+            if (deckA === deckB) {
                 html += `<div class="heatmap-cell" style="background: rgba(255,255,255,0.02);">-</div>`;
             } else {
                 let wins = 0, matches = 0;
@@ -321,12 +340,43 @@ function renderDashboard(data, currentData, eloRatings) {
     container.innerHTML = html;
 }
 
+window.saveAlias = function(el) {
+    const model = el.getAttribute('data-model');
+    // Remove the elimination badge HTML if present before saving
+    let clone = el.cloneNode(true);
+    const badge = clone.querySelector('.elim-badge');
+    if (badge) badge.remove();
+    const text = clone.innerText.trim();
+    
+    const customAliases = JSON.parse(localStorage.getItem('modelAliases')) || {};
+    customAliases[model] = text;
+    localStorage.setItem('modelAliases', JSON.stringify(customAliases));
+    el.style.borderColor = 'rgba(255,255,255,0.2)';
+    
+    // Slight visual feedback
+    el.style.background = 'rgba(16, 185, 129, 0.1)';
+    setTimeout(() => { el.style.background = 'transparent'; }, 500);
+    window.isEditing = false;
+}
+
 function formatName(name) {
-    const id = name.replace('.csv', '').replace('decks/', '').replace('deck_', '');
-    if (deckNames[id]) {
-        return `D${id}: ${deckNames[id]}`;
+    const customAliases = JSON.parse(localStorage.getItem('modelAliases')) || {};
+    if (customAliases[name]) return customAliases[name];
+
+    const matchBank = name.match(/deck_(bank_\d+)/);
+    const matchRegular = name.match(/deck_(\d+)/);
+    
+    let id = '';
+    if (matchBank) {
+        id = matchBank[1];
+    } else if (matchRegular) {
+        id = matchRegular[1];
     }
-    return `Deck ${id}`;
+    
+    if (id && deckNames[id]) {
+        return `Deck ${id.replace('bank_', 'Bank ')} (${deckNames[id]})`;
+    }
+    return name;
 }
 
 function renderRoster(names) {
@@ -347,36 +397,123 @@ function renderRoster(names) {
     `).join('');
 }
 
-async function fetchStatus() {
-    try {
-        const res = await fetch('/decks/status.json');
-        if (res.ok) {
-            const data = await res.json();
-            renderStatus(data);
-        }
-    } catch(e) {}
+function escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[ch]));
 }
 
-function renderStatus(data) {
-    const textEl = document.getElementById('live-status-text');
-    const fillEl = document.getElementById('status-progress-fill');
-    const containerEl = document.getElementById('status-progress-container');
-    
-    if (textEl) {
-        let text = data.action || "Idle";
-        textEl.innerText = text;
+function formatBytes(bytes) {
+    if (!Number.isFinite(bytes)) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+function formatReplayDate(seconds) {
+    if (!seconds) return '';
+    return new Date(seconds * 1000).toLocaleString();
+}
+
+function replayTitle(replay) {
+    const meta = replay.metadata || {};
+    if (meta.p0_name || meta.p1_name) {
+        return `${meta.p0_name || 'Player 0'} vs ${meta.p1_name || 'Player 1'}`;
     }
-    
-    if (fillEl && containerEl && data.total > 0) {
-        containerEl.style.display = 'block';
-        const percent = (data.completed / data.total) * 100;
-        fillEl.style.width = `${percent}%`;
-    } else if (containerEl) {
-        containerEl.style.display = 'none';
+    return replay.path.split('/').pop();
+}
+
+function renderReplays(replays) {
+    const list = document.getElementById('replay-list');
+    const status = document.getElementById('replay-status');
+    if (!list || !status) return;
+
+    if (!replays.length) {
+        status.textContent = 'No replay JSON files found yet.';
+        list.innerHTML = '';
+        return;
+    }
+
+    status.textContent = `${replays.length} replay${replays.length === 1 ? '' : 's'} available`;
+    list.innerHTML = replays.map(replay => {
+        const snapshots = replay.snapshots == null ? 'unknown steps' : `${replay.snapshots} steps`;
+        const modified = formatReplayDate(replay.mtime);
+        const size = formatBytes(replay.size);
+        return `
+            <article class="replay-item">
+                <div class="replay-item-title">${escapeHtml(replayTitle(replay))}</div>
+                <div class="replay-meta">
+                    <span class="replay-pill">${escapeHtml(replay.group)}</span>
+                    <span class="replay-pill">${escapeHtml(snapshots)}</span>
+                    ${size ? `<span class="replay-pill">${escapeHtml(size)}</span>` : ''}
+                </div>
+                <div class="replay-path">${escapeHtml(replay.path)}${modified ? `<br>${escapeHtml(modified)}` : ''}</div>
+                <div class="replay-links">
+                    <button class="btn btn-primary" onclick="launchHeroz('${escapeHtml(replay.url)}')" type="button">HERoz Viz</button>
+                    <a class="btn btn-secondary" href="${escapeHtml(replay.url)}" target="_blank" rel="noopener">JSON</a>
+                </div>
+            </article>
+        `;
+    }).join('');
+}
+
+async function loadReplays() {
+    const status = document.getElementById('replay-status');
+    if (status) status.textContent = 'Loading replays...';
+
+    try {
+        const res = await fetch('/api/replays', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        const data = await res.json();
+        renderReplays(data.replays || []);
+    } catch (err) {
+        console.error('Could not load replays:', err);
+        if (status) status.textContent = 'Replay list needs the Flask dashboard server on port 8050.';
     }
 }
+window.launchHeroz = async function(url) {
+    try {
+        const res = await fetch(url);
+        const text = await res.text();
+        const obj = JSON.parse(text);
+
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = "json";
+        
+        if ("steps" in obj) {
+            input.value = JSON.stringify(obj["steps"][0][0]["visualize"]);
+        } else {
+            input.value = text;
+        }
+
+        const form = document.createElement("form");
+        form.method = "POST";
+        form.action = "https://ptcgvis.heroz.jp/Visualizer/Replay/0";
+        form.target = "_blank";
+        form.appendChild(input);
+
+        document.body.appendChild(form);
+        form.submit();
+        
+        setTimeout(() => document.body.removeChild(form), 1000);
+    } catch (err) {
+        console.error("Failed to launch HERoz visualizer:", err);
+        alert("Fehler beim Starten des Visualizers.");
+    }
+};
+
+// Auto-refresh logic
+window.isEditing = false;
 
 async function pollData() {
+    if (window.isEditing) return; // Prevent overwriting DOM while user is typing
+    
     try {
         const nameRes = await fetch('/decks/deck_names.json');
         if (nameRes.ok) deckNames = await nameRes.json();
@@ -428,10 +565,6 @@ function checkServerStatus() {
                     ind.style.background = '#888';
                     ind.style.boxShadow = 'none';
                 }
-                const textEl = document.getElementById('live-status-text');
-                if (textEl) textEl.textContent = "Pausiert / Gestoppt";
-                const prog = document.getElementById('status-progress-container');
-                if (prog) prog.style.display = 'none';
             }
         })
         .catch(err => {
@@ -479,143 +612,3 @@ checkServerStatus();
 // Initial fetch
 pollData();
 setInterval(pollData, 5000);
-
-async function startCustomTraining() {
-    const btn = document.querySelector('#training-form button');
-    const statusDiv = document.getElementById('train-custom-status');
-    if (!statusDiv) return;
-    
-    const learningDeck = document.getElementById('train-learning-deck').value;
-    const mode = document.getElementById('train-mode').value;
-    const opponentDeck = document.getElementById('train-opponent-deck').value;
-    const timesteps = parseInt(document.getElementById('train-timesteps').value) || 500000;
-    
-    const titleEl = document.getElementById('train-model-title');
-    const modelTitle = titleEl ? titleEl.value : "";
-    
-    const algoEl = document.getElementById('train-algo');
-    const algo = algoEl ? algoEl.value : "PPO";
-    
-    const entStartEl = document.getElementById('train-ent-start');
-    const entStart = entStartEl ? parseFloat(entStartEl.value) : 0.1;
-    
-    const entEndEl = document.getElementById('train-ent-end');
-    const entEnd = entEndEl ? parseFloat(entEndEl.value) : 0.01;
-    
-    // Gather rewards
-    const rewardConfig = {
-        PRIZE_WIN: parseFloat(document.getElementById('rew-PRIZE_WIN').value),
-        DECK_OUT_WIN: parseFloat(document.getElementById('rew-DECK_OUT_WIN').value),
-        LOSS: parseFloat(document.getElementById('rew-LOSS').value),
-        DECK_OUT_PENALTY: parseFloat(document.getElementById('rew-DECK_OUT_PENALTY').value),
-        PRIZE_TAKEN: parseFloat(document.getElementById('rew-PRIZE_TAKEN').value),
-        PRIZE_LOST: parseFloat(document.getElementById('rew-PRIZE_LOST').value),
-        DECK_SHRINK: parseFloat(document.getElementById('rew-DECK_SHRINK').value),
-        DAMAGE_TAKEN: parseFloat(document.getElementById('rew-DAMAGE_TAKEN').value),
-        DAMAGE_DEALT: parseFloat(document.getElementById('rew-DAMAGE_DEALT').value),
-        ENERGY_ATTACHED: parseFloat(document.getElementById('rew-ENERGY_ATTACHED').value),
-        OPPONENT_KO: parseFloat(document.getElementById('rew-OPPONENT_KO').value),
-        TIME_PENALTY: parseFloat(document.getElementById('rew-TIME_PENALTY').value)
-    };
-
-    const payload = {
-        learning_deck: learningDeck,
-        mode: mode,
-        opponent_deck: opponentDeck,
-        timesteps: timesteps,
-        model_title: modelTitle,
-        algo: algo,
-        ent_start: entStart,
-        ent_end: entEnd,
-        reward_config: rewardConfig
-    };
-
-    btn.disabled = true;
-    statusDiv.textContent = 'Starte Training... Bitte in der Konsole prüfen.';
-    
-    try {
-        const res = await fetch('/api/train_custom', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        const data = await res.json();
-        if (data.error) {
-            statusDiv.textContent = 'Fehler: ' + data.error;
-            statusDiv.style.color = '#f43f5e';
-        } else {
-            statusDiv.textContent = 'Training läuft im Hintergrund! 🚀';
-            statusDiv.style.color = '#10b981';
-        }
-    } catch (e) {
-        statusDiv.textContent = 'Netzwerkfehler beim Starten.';
-        statusDiv.style.color = '#f43f5e';
-    } finally {
-        btn.disabled = false;
-    }
-}
-
-async function cancelCustomTraining() {
-    const statusDiv = document.getElementById('train-custom-status');
-    statusDiv.textContent = 'Breche Training ab...';
-    
-    try {
-        const res = await fetch('/api/cancel_custom', { method: 'POST' });
-        const data = await res.json();
-        
-        if (data.error) {
-            statusDiv.textContent = 'Fehler beim Abbrechen: ' + data.error;
-            statusDiv.style.color = '#f43f5e';
-        } else {
-            statusDiv.textContent = 'Training erfolgreich abgebrochen! 🛑';
-            statusDiv.style.color = '#f87171';
-            
-            // Hide the progress bar container immediately
-            const container = document.getElementById('training-progress-container');
-            if (container) container.style.display = 'none';
-        }
-    } catch (e) {
-        statusDiv.textContent = 'Netzwerkfehler beim Abbrechen.';
-        statusDiv.style.color = '#f43f5e';
-    }
-}
-
-// Poll Training Progress
-setInterval(async () => {
-    try {
-        const res = await fetch('/api/training_progress');
-        const data = await res.json();
-        
-        const container = document.getElementById('training-progress-container');
-        const fill = document.getElementById('training-progress-fill');
-        const text = document.getElementById('training-progress-text');
-        const percentEl = document.getElementById('training-progress-percent');
-        
-        if (!container || data.status === 'not_started') {
-            if (container) container.style.display = 'none';
-            return;
-        }
-        
-        container.style.display = 'block';
-        
-        let percent = 0;
-        if (data.total > 0) {
-            percent = Math.min(100, Math.round((data.current / data.total) * 100));
-        }
-        
-        fill.style.width = percent + '%';
-        percentEl.textContent = percent + '%';
-        
-        if (data.status === 'starting') {
-            text.textContent = 'Bereite Training vor...';
-        } else if (data.status === 'running') {
-            text.textContent = `Training läuft (${data.current} / ${data.total})`;
-        } else if (data.status === 'finished') {
-            text.textContent = 'Training abgeschlossen! ✅';
-            fill.style.background = 'linear-gradient(90deg, #10b981, #10b981)';
-        }
-    } catch (e) {
-        // Ignore network errors on polling to prevent spam
-    }
-}, 1000);

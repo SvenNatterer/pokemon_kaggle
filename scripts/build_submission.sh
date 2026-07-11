@@ -1,20 +1,31 @@
 #!/usr/bin/env bash
 set -e
 
-cd "$(dirname \"$0\")/.." || exit 1
+cd "$(dirname "$0")/.." || exit 1
 if [[ $# -gt 0 ]]; then
   DECK_NUM="$1"
-  MODEL_FILE="models/ppo_deck_${DECK_NUM}.zip"
+  MODEL_FILE=""
+  for candidate in "models/ppo_belief_deck_${DECK_NUM}.zip" "models/ppo_v4_deck_${DECK_NUM}.zip" "models/ppo_deck_${DECK_NUM}.zip"; do
+    if [[ -f "$candidate" ]]; then
+      MODEL_FILE="$candidate"
+      break
+    fi
+  done
 else
-  MODEL_FILE=$(ls -t models/ppo_deck_*.zip 2>/dev/null | head -n 1)
+  MODEL_FILE=$({ ls -t models/ppo_belief_deck_*.zip models/ppo_v4_deck_*.zip models/ppo_deck_*.zip 2>/dev/null || true; } | head -n 1)
   if [[ -z "$MODEL_FILE" ]]; then
-    echo "No models/ppo_deck_*.zip model found." >&2
+    echo "No models/ppo_belief_deck_*.zip, models/ppo_v4_deck_*.zip, or models/ppo_deck_*.zip model found." >&2
     exit 1
   fi
-  DECK_NUM=$(basename "$MODEL_FILE" .zip | sed 's/^ppo_deck_//')
+  DECK_NUM=$(basename "$MODEL_FILE" .zip | sed -E 's/^ppo(_v4|_belief)?_deck_//')
 fi
 
-DECK_FILE="decks/deck_${DECK_NUM}.csv"
+if [[ "$DECK_NUM" == bank_* ]]; then
+  DECK_FILE="decks/deck_bank/${DECK_NUM}.csv"
+else
+  DECK_BASE_NUM=$(echo "$DECK_NUM" | grep -o "^[0-9]*")
+  DECK_FILE="decks/deck_${DECK_BASE_NUM}.csv"
+fi
 
 if [[ ! -f "$MODEL_FILE" ]]; then
   echo "Model not found: $MODEL_FILE" >&2

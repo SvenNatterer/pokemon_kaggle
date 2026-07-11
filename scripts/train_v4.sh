@@ -18,24 +18,32 @@ source venv/bin/activate
 export PYTHONPATH="src:$PYTHONPATH"
 
 # Configuration
-TIMESTEPS=1000000
 DECK="decks/deck_98.csv"
 MODEL_NAME="models/ppo_v4_deck_98.zip"
 NUM_ENVS=8
+CHECKPOINT_INTERVAL=250000
+KEEP_CHECKPOINTS=2
 
-echo "Training for $TIMESTEPS steps..."
+echo "Training endlessly. Press Ctrl+C to stop after the latest checkpoint/save."
 echo "Deck: $DECK"
 echo "Model will be saved to: $MODEL_NAME"
+echo "Rotating checkpoints: ${MODEL_NAME%.zip}_checkpoint_1.zip / ${MODEL_NAME%.zip}_checkpoint_2.zip"
 echo ""
 
 # Start the training
 python src/train.py \
     --deck "$DECK" \
     --model-name "$MODEL_NAME" \
-    --timesteps "$TIMESTEPS" \
-    --num-envs "$NUM_ENVS"
+    --opp-deck "decks/deck_98.csv" \
+    --endless \
+    --num-envs "$NUM_ENVS" \
+    --checkpoint-interval "$CHECKPOINT_INTERVAL" \
+    --keep-checkpoints "$KEEP_CHECKPOINTS" \
+    --n-epochs 4 \
+    --clip-range 0.2 \
+    --batch-size 1024
 
 echo "========================================"
-echo "✅ Training Completed!"
+echo "Training stopped."
 echo "Model saved to: $MODEL_NAME"
 echo "========================================"

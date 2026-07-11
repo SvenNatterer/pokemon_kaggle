@@ -17,6 +17,12 @@ def read_deck(deck_path):
 
 from stable_baselines3.common.monitor import Monitor
 
+def resolve_model_path(model_name):
+    model_path = model_name if os.path.dirname(model_name) else os.path.join("models", model_name)
+    if model_path.endswith(".zip"):
+        model_path = model_path[:-4]
+    return model_path
+
 def make_env(learning_deck_path, opponent_deck_path, opponent_model_path, reward_config=None):
     def _init():
         learning_deck = read_deck(learning_deck_path)
@@ -33,10 +39,19 @@ def main():
     parser.add_argument('--opponent-model', type=str, required=True, help='Path to load the opponent model')
     parser.add_argument('--timesteps', type=int, default=25000, help='Number of timesteps to train')
     parser.add_argument('--num-envs', type=int, default=4, help='Number of parallel environments')
-    parser.add_argument('--algo', type=str, default='PPO', help='Algorithm to use: PPO or RecurrentPPO')
-    parser.add_argument('--ent-start', type=float, default=0.1, help='Starting entropy coefficient (creativity)')
-    parser.add_argument('--ent-end', type=float, default=0.01, help='Ending entropy coefficient (creativity)')
+    parser.add_argument('--algo', type=str, default='RecurrentPPO', choices=['RecurrentPPO', 'PPO'], help='Algorithm to use. RecurrentPPO applies action masks; PPO does not.')
+    parser.add_argument('--ent-start', type=float, default=0.02, help='Starting entropy coefficient (creativity)')
+    parser.add_argument('--ent-end', type=float, default=0.005, help='Ending entropy coefficient (creativity)')
+    parser.add_argument('--lr', type=float, default=3e-4, help='Learning rate')
+    parser.add_argument('--n-epochs', type=int, default=2, help='PPO epochs per rollout')
+    parser.add_argument('--clip-range', type=float, default=0.1, help='PPO clipping range')
+    parser.add_argument('--target-kl', type=float, default=0.05, help='Stop PPO update early above this KL')
     parser.add_argument('--reward-config', type=str, default='{}', help='JSON string containing reward configuration overrides')
+    parser.add_argument('--aux-coef', type=float, default=0.5, help='Weight for hidden-card auxiliary loss')
+    parser.add_argument('--belief-actor', action='store_true', help='Feed the learned hidden-card belief embedding into the actor')
+    parser.add_argument('--belief-dim', type=int, default=64, help='Size of the learned belief embedding used by --belief-actor')
+    parser.add_argument('--no-belief-detach', dest='belief_detach', action='store_false', help='Allow PPO loss gradients into the belief encoder')
+    parser.set_defaults(belief_detach=True)
     args = parser.parse_args()
 
     import json
@@ -55,22 +70,58 @@ def main():
     model_path = args.learning_model
     
     from src.custom_ppo import CustomPPO, PokemonTCGRecurrentPolicy
+    from src.custom_policy import PokemonTCGFeatureExtractor
+    policy_kwargs = dict(features_extractor_class=PokemonTCGFeatureExtractor)
     
     if args.algo == "RecurrentPPO":
         print("Using RecurrentPPO (CustomPPO) with LSTM memory...")
         algo_class = CustomPPO
         policy = PokemonTCGRecurrentPolicy
+        policy_kwargs.update({
+            "use_belief_actor": args.belief_actor,
+            "belief_dim": args.belief_dim,
+            "detach_belief_actor": args.belief_detach,
+        })
     else:
-        print("Using standard PPO (Feedforward)...")
+        print("Using standard PPO (Feedforward, no action masking). RecurrentPPO is recommended for this env.")
         algo_class = PPO
         policy = 'MultiInputPolicy'
         
+    model_path = resolve_model_path(model_path)
+        
+    model = None
     if os.path.exists(f"{model_path}.zip"):
         print(f"Loading existing learning model from {model_path}.zip...")
-        model = algo_class.load(model_path, env=env, tensorboard_log="logs/")
-        # Update ent_coef on loaded model
-        model.ent_coef = args.ent_start
-    else:
+        try:
+            model = algo_class.load(model_path, env=env, tensorboard_log="logs/")
+        except Exception as e:
+            print(f"Could not load {model_path}.zip as {args.algo}: {e}")
+            print("Creating a fresh model with the selected algorithm instead.")
+
+        if model is not None:
+            loaded_belief_actor = bool(getattr(getattr(model, "policy", None), "use_belief_actor", False))
+            if args.belief_actor and not loaded_belief_actor:
+                raise RuntimeError(
+                    "--belief-actor was requested, but the existing checkpoint uses the legacy actor. "
+                    "Use a fresh --learning-model for the belief-actor experiment."
+                )
+            if loaded_belief_actor and not args.belief_actor:
+                print("Loaded a belief-actor checkpoint; continuing with its saved architecture.")
+            # Update parameters on loaded model
+            if hasattr(model, "c_aux"):
+                model.c_aux = args.aux_coef
+            model.ent_coef = args.ent_start
+            model.learning_rate = args.lr
+            from stable_baselines3.common.utils import get_schedule_fn
+            model.lr_schedule = get_schedule_fn(args.lr)
+            model.clip_range = get_schedule_fn(args.clip_range)
+            model.target_kl = args.target_kl
+            model.n_epochs = args.n_epochs
+            if hasattr(model, 'policy') and hasattr(model.policy, 'optimizer'):
+                for param_group in model.policy.optimizer.param_groups:
+                    param_group['lr'] = args.lr
+
+    if model is None:
         print(f"Creating new {args.algo} model for learning agent...")
         kwargs = {
             "policy": policy,
@@ -78,13 +129,16 @@ def main():
             "verbose": 1,
             "ent_coef": args.ent_start,
             "tensorboard_log": "logs/",
-            "learning_rate": 3e-4,
+            "learning_rate": args.lr,
             "n_steps": 1024,
             "batch_size": 1024,
-            "n_epochs": 3
+            "n_epochs": args.n_epochs,
+            "clip_range": args.clip_range,
+            "target_kl": args.target_kl,
+            "policy_kwargs": policy_kwargs
         }
         if args.algo == "RecurrentPPO":
-            kwargs["c_aux"] = 0.5
+            kwargs["c_aux"] = args.aux_coef
             
         model = algo_class(**kwargs)
 

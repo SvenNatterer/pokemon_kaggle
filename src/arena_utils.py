@@ -4,6 +4,15 @@ import sys
 import glob
 import subprocess
 import shutil
+import time
+import random
+
+from src.model_paths import (
+    default_deck_model_path,
+    iter_existing_deck_model_paths,
+    resolve_deck_model_base,
+    resolve_deck_model_path,
+)
 
 # All unique deck URLs from the top 25 on LimitlessTCG
 MASTER_URLS = [
@@ -114,19 +123,25 @@ ELIMINATE_COUNT = 3
 TIMESTEPS_PER_GEN = 100000
 NUM_MATCH_GAMES = 5
 
+def get_active_models():
+    from src.model_paths import discover_deck_models
+    return [m["name"] for m in discover_deck_models(include_variants=True)]
+
 def get_active_decks():
     decks = glob.glob("decks/deck_*.csv")
+    valid_decks = [d for d in decks if d.split('_')[-1].split('.')[0].isdigit()]
     # Return sorted by ID
-    return sorted(decks, key=lambda x: int(x.split('_')[-1].split('.')[0]))
+    return sorted(valid_decks, key=lambda x: int(x.split('_')[-1].split('.')[0]))
 
 def get_highest_id():
     import glob
     active = glob.glob("decks/deck_*.csv")
     ghosts = glob.glob("decks/ghost_pool/deck_*.csv")
     all_decks = active + ghosts
-    if not all_decks:
+    valid_decks = [d for d in all_decks if d.split('_')[-1].split('.')[0].isdigit()]
+    if not valid_decks:
         return 0
-    return max([int(x.split('_')[-1].split('.')[0]) for x in all_decks])
+    return max([int(x.split('_')[-1].split('.')[0]) for x in valid_decks])
 
 def scrape_missing_decks():
     active = get_active_decks()
@@ -187,16 +202,17 @@ def scrape_missing_decks():
             # Weight Transfer / Inheritance
             source_model = None
             msg = ""
+            champion_model = resolve_deck_model_path(champion_id) if champion_id else ""
             if os.path.exists("models/ppo_base_brain.zip"):
                 source_model = "models/ppo_base_brain.zip"
                 msg = f"🧠 Deck {new_deck_id} startet mit dem Base Brain Fundament!"
-            elif champion_id and os.path.exists(f"models/ppo_deck_{champion_id}.zip"):
-                source_model = f"models/ppo_deck_{champion_id}.zip"
+            elif champion_model:
+                source_model = champion_model
                 msg = f"🧬 Deck {new_deck_id} erbt das Gehirn von Champion Deck {champion_id}!"
                 
             if source_model:
                 try:
-                    shutil.copyfile(source_model, f"models/ppo_deck_{new_deck_id}.zip")
+                    shutil.copyfile(source_model, default_deck_model_path(new_deck_id))
                     print(f" -> {msg}")
                     with open("decks/status.json", "w") as f:
                         json.dump({"action": msg, "completed": 1, "total": 1}, f)
@@ -231,16 +247,17 @@ def scrape_missing_decks():
                 # Weight Transfer / Inheritance
                 source_model = None
                 msg = ""
+                champion_model = resolve_deck_model_path(champion_id) if champion_id else ""
                 if os.path.exists("models/ppo_base_brain.zip"):
                     source_model = "models/ppo_base_brain.zip"
                     msg = f"🧠 Deck {new_deck_id} erbt das Base Brain Fundament (Fallback)!"
-                elif champion_id and os.path.exists(f"models/ppo_deck_{champion_id}.zip"):
-                    source_model = f"models/ppo_deck_{champion_id}.zip"
+                elif champion_model:
+                    source_model = champion_model
                     msg = f"🧬 Deck {new_deck_id} erbt das Gehirn von Champion Deck {champion_id} (Fallback)!"
                     
                 if source_model:
                     try:
-                        shutil.copyfile(source_model, f"models/ppo_deck_{new_deck_id}.zip")
+                        shutil.copyfile(source_model, default_deck_model_path(new_deck_id))
                         print(f" -> {msg}")
                         with open("decks/status.json", "w") as f:
                             json.dump({"action": msg, "completed": 1, "total": 1}, f)
@@ -303,12 +320,11 @@ def train_active_decks(last_scores):
 
     for i, deck in enumerate(active):
         deck_id = deck.split('_')[-1].split('.')[0]
-        model_name = f"ppo_deck_{deck_id}"
+        model_name = resolve_deck_model_base(deck_id)
         
         # Matchmaker: pick an opponent
         opp_deck = sample_opponent(deck_id)
         opp_id = os.path.basename(opp_deck).split('_')[-1].split('.')[0]
-        opp_model_name = f"ppo_deck_{opp_id}"
         
         # Update leaderboard to show training status
         d_name = get_deck_name(deck)
@@ -319,12 +335,7 @@ def train_active_decks(last_scores):
             f"🧠 Training: {d_name} vs {opp_name} (100.000 Schritte)"
         )
         
-        # Check if opponent model is in active or ghost pool
-        opp_model_path = f"models/{opp_model_name}.zip"
-        if not os.path.exists(opp_model_path):
-            opp_model_path = f"models/ghost_pool/{opp_model_name}.zip"
-            if not os.path.exists(opp_model_path):
-                opp_model_path = "" # Will fallback to self play inside train.py if missing
+        opp_model_path = resolve_deck_model_path(opp_id, include_ghost=True)
                 
         print(f"Training Deck {deck_id} against {opp_id}...")
         
@@ -346,8 +357,11 @@ ELO_RATINGS_FILE = "decks/elo_ratings.json"
 
 def get_games_played():
     if os.path.exists(GAMES_PLAYED_FILE):
-        with open(GAMES_PLAYED_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(GAMES_PLAYED_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
     return {}
 
 def save_games_played(gp):
@@ -356,8 +370,11 @@ def save_games_played(gp):
 
 def get_elo_ratings():
     if os.path.exists(ELO_RATINGS_FILE):
-        with open(ELO_RATINGS_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(ELO_RATINGS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return {}
     return {}
 
 def save_elo_ratings(elos):
@@ -391,6 +408,8 @@ def get_deck_name(deck_csv):
             return "Base Brain"
         if "deck_2" in deck_csv:
             return "Dragapult Dusknoir"
+        if "deck_4" in deck_csv:
+            return "v4 Base Brain"
             
         with open(deck_csv, 'r') as f:
             for line in f:
@@ -404,7 +423,12 @@ def get_deck_name(deck_csv):
 
 def update_live_leaderboard(winrates, completed, total, current_action="", match_results=None):
     elos = get_elo_ratings()
-    active_ids = list(winrates.keys())
+    
+    # We want ALL active models to be tracked
+    from src.model_paths import discover_deck_models
+    all_models = [m["name"] for m in discover_deck_models(include_variants=True)]
+    
+    active_ids = list(set(list(winrates.keys()) + all_models))
     for d_id in active_ids:
         if str(d_id) not in elos:
             elos[str(d_id)] = 1200.0
@@ -439,18 +463,24 @@ def update_live_leaderboard(winrates, completed, total, current_action="", match
         except: pass
 
     import glob
-    for deck_file in glob.glob("decks/deck_*.csv") + glob.glob("decks/ghost_pool/deck_*.csv"):
+    for deck_file in glob.glob("decks/deck_*.csv") + glob.glob("decks/ghost_pool/deck_*.csv") + glob.glob("decks/deck_bank/bank_*.csv"):
         try:
-            d_id = str(deck_file.split('_')[-1].split('.')[0])
+            base = os.path.basename(deck_file).replace('.csv', '')
+            d_id = base.replace('deck_', '') if base.startswith('deck_') else base
             deck_names_map[d_id] = get_deck_name(deck_file)
         except: pass
 
-    for rank, deck_id in enumerate(sorted_ids, 1):
-        d_name = deck_names_map.get(str(deck_id), f"Deck {deck_id}")
-        gp = games_played.get(deck_id, 0)
-        wr = winrates.get(deck_id, 0.0)
-        elo_val = elos.get(str(deck_id), 1200.0)
-        md += f"| **{rank}** | Deck {deck_id} ({d_name}) | **{int(elo_val)}** | {wr:.1f}% | {gp} |\n"
+    for rank, model_id in enumerate(sorted_ids, 1):
+        from src.model_paths import parse_deck_model_path
+        parsed = parse_deck_model_path(f"models/{model_id}.zip")
+        deck_num = parsed["deck_id"] if parsed else "0"
+        d_name = deck_names_map.get(str(deck_num), f"Deck {deck_num}")
+        gp = games_played.get(model_id, 0)
+        
+        wr = winrates.get(model_id, 0.0)
+        
+        elo_val = elos.get(str(model_id), 1200.0)
+        md += f"| **{rank}** | {model_id} ({d_name}) | **{int(elo_val)}** | {wr:.1f}% | {gp} |\\n"
         
     with open("decks/deck_names.json", "w") as f:
         json.dump(deck_names_map, f)
@@ -467,33 +497,118 @@ def update_live_leaderboard(winrates, completed, total, current_action="", match
     with open(ARTIFACT_PATH, "w", encoding="utf-8") as f:
         f.write(md)
 
+
+def run_tournament(num_matches=None):
+    matches_played = 0
+    while num_matches is None or matches_played < num_matches:
+        run_continuous_match()
+        matches_played += 1
+
+FILTER_COUNTER = 0
+
+def auto_filter_enabled():
+    value = os.environ.get("POKEMON_ARENA_AUTO_FILTER", "")
+    return value.lower() in {"1", "true", "yes", "on"}
+
+def maybe_run_auto_filter(threshold, reason):
+    global FILTER_COUNTER
+    FILTER_COUNTER += 1
+    if FILTER_COUNTER < threshold:
+        return
+
+    FILTER_COUNTER = 0
+    if not auto_filter_enabled():
+        print(f"Arena: automatic filtering disabled; run scripts/manual_filter_models.py manually ({reason}).")
+        return
+
+    print("Arena: Running automatic roster management (filter_best_models.py)...")
+    subprocess.run(["venv/bin/python", "filter_best_models.py"])
+
+def manage_queue():
+    import os
+    import random
+    import shutil
+    from src.model_paths import discover_deck_models
+    
+    games = get_games_played()
+    active = get_active_models()
+    
+    # Identify challengers
+    challengers = [m for m in active if games.get(m, 0) < 100]
+    challengers_count = len(challengers)
+    
+    if challengers_count < 3:
+        # Only pull valid models (ignoring junk/temp files)
+        queue_models = discover_deck_models(model_dir="models/queue")
+        if queue_models:
+            chosen = random.choice(queue_models)["path"]
+            name = os.path.basename(chosen)[:-4]
+            print(f"Queue: Introducing {name} to the arena! (Currently {challengers_count} challengers active)")
+            shutil.move(chosen, os.path.join("models", os.path.basename(chosen)))
+    elif challengers_count > 3:
+        import time
+        now = time.time()
+        
+        def is_recently_modified(name):
+            try:
+                mtime = os.path.getmtime(os.path.join("models", name + ".zip"))
+                return (now - mtime) < 7200 # 2 hours
+            except:
+                return False
+
+        # Protect models that are likely actively training
+        pushable_challengers = [c for c in challengers if not is_recently_modified(c)]
+        
+        # Sort by games played
+        pushable_challengers.sort(key=lambda m: games.get(m, 0))
+        
+        excess = challengers_count - 3
+        to_push = pushable_challengers[:excess]
+        os.makedirs("models/queue", exist_ok=True)
+        
+        for name in to_push:
+            for m in discover_deck_models(model_dir="models"):
+                if m["name"] == name:
+                    print(f"Queue: Pushing {name} back to queue to maintain limit of 3!")
+                    shutil.move(m["path"], os.path.join("models/queue", os.path.basename(m["path"])))
+                    break
+
 def run_continuous_match():
     sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
     
-    active = get_active_decks()
+    manage_queue()
+    
+    active = get_active_models()
     if len(active) < 2:
-        print("Not enough active decks to run a match.")
-        import time
+        print("Not enough active models to run a match.")
         time.sleep(5)
         return
         
-    import random
-    deck_a_file, deck_b_file = random.sample(active, 2)
+    games = get_games_played()
+    active_games = {m: games.get(m, 0) for m in active}
+    min_games = min(active_games.values())
+    lowest_models = [m for m in active if active_games[m] == min_games]
     
-    id_a = deck_a_file.split('_')[-1].split('.')[0]
-    id_b = deck_b_file.split('_')[-1].split('.')[0]
+    id_a = random.choice(lowest_models)
+    remaining = [m for m in active if m != id_a]
+    id_b = random.choice(remaining)
     
-    csv_a = deck_a_file
-    zip_a = f"models/ppo_deck_{id_a}.zip"
+    from src.model_paths import parse_deck_model_path
+    parsed_a = parse_deck_model_path(f"models/{id_a}.zip")
+    parsed_b = parse_deck_model_path(f"models/{id_b}.zip")
+    deck_num_a = parsed_a["deck_id"] if parsed_a else "0"
+    deck_num_b = parsed_b["deck_id"] if parsed_b else "0"
     
-    csv_b = deck_b_file
-    zip_b = f"models/ppo_deck_{id_b}.zip"
+    csv_a = f"decks/deck_bank/{deck_num_a}.csv" if str(deck_num_a).startswith("bank_") else f"decks/deck_{deck_num_a}.csv"
+    csv_b = f"decks/deck_bank/{deck_num_b}.csv" if str(deck_num_b).startswith("bank_") else f"decks/deck_{deck_num_b}.csv"
+    zip_a = f"models/{id_a}.zip"
+    zip_b = f"models/{id_b}.zip"
     
-    if not os.path.exists(zip_a) or not os.path.exists(zip_b):
+    if not zip_a or not zip_b:
         return
         
-    name_a = get_deck_name(deck_a_file)
-    name_b = get_deck_name(deck_b_file)
+    name_a = get_deck_name(csv_a)
+    name_b = get_deck_name(csv_b)
     
     # Optional live update status text
     try:
@@ -505,10 +620,10 @@ def run_continuous_match():
             }, f)
     except: pass
     
-    print(f"Match: Deck {id_a} vs Deck {id_b}")
+    print(f"Match: {id_a} vs {id_b}")
     
     result = subprocess.run(
-        ["python", "src/evaluate_single.py", zip_a, csv_a, zip_b, csv_b, str(NUM_MATCH_GAMES)],
+        [sys.executable, "src/evaluate_single.py", zip_a, csv_a, zip_b, csv_b, str(NUM_MATCH_GAMES)],
         capture_output=True, text=True
     )
     
@@ -520,8 +635,10 @@ def run_continuous_match():
     pw_b = 0
     dw_b = 0
     bw_b = 0
-    if result.returncode != 0:
-        print(f"Evaluation crashed! (C++ error). Counting as 0 wins.")
+    if "Error" in result.stderr or "Evaluation crashed!" in result.stdout or "CHILD ERROR" in result.stdout:
+        print("Evaluation crashed! Counting as 0 wins.")
+        print(f"STDOUT: {result.stdout}")
+        print(f"STDERR: {result.stderr}")
     else:
         for line in result.stdout.split('\n'):
             if line.startswith("RESULT:"):
@@ -551,9 +668,20 @@ def run_continuous_match():
     expected_a = 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
     expected_b = 1 / (1 + 10 ** ((elo_a - elo_b) / 400))
     
-    K = 32
-    new_elo_a = elo_a + K * (score_a_total - expected_a * NUM_MATCH_GAMES)
-    new_elo_b = elo_b + K * (score_b_total - expected_b * NUM_MATCH_GAMES)
+    games_played_dict = get_games_played()
+    gp_a = games_played_dict.get(id_a, 0)
+    gp_b = games_played_dict.get(id_b, 0)
+    
+    def get_k_factor(games):
+        if games < 50: return 32
+        if games < 150: return 24
+        return 16
+        
+    K_a = get_k_factor(gp_a)
+    K_b = get_k_factor(gp_b)
+    
+    new_elo_a = elo_a + K_a * (score_a_total - expected_a * NUM_MATCH_GAMES)
+    new_elo_b = elo_b + K_b * (score_b_total - expected_b * NUM_MATCH_GAMES)
     
     elos[id_a] = new_elo_a
     elos[id_b] = new_elo_b
@@ -567,8 +695,11 @@ def run_continuous_match():
     # Track pairwise for Matchmaker (and dashboard)
     pairwise_file = "decks/pairwise_winrates.json"
     if os.path.exists(pairwise_file):
-        with open(pairwise_file, "r") as f:
-            pairwise = json.load(f)
+        try:
+            with open(pairwise_file, "r") as f:
+                pairwise = json.load(f)
+        except:
+            pairwise = {}
     else:
         pairwise = {}
         
@@ -592,8 +723,11 @@ def run_continuous_match():
     # Track for win conditions as well (in current_generation_winrates.json)
     current_file = "decks/current_generation_winrates.json"
     if os.path.exists(current_file):
-        with open(current_file, "r") as f:
-            current_pw = json.load(f)
+        try:
+            with open(current_file, "r") as f:
+                current_pw = json.load(f)
+        except:
+            current_pw = {}
     else:
         current_pw = {}
         
@@ -633,9 +767,11 @@ def run_continuous_match():
         json.dump(current_pw, f)
         
     # Re-calculate overall scores to update the static artifact/board
-    scores = {d.split('_')[-1].split('.')[0]: 0 for d in active}
-    total_games = {d.split('_')[-1].split('.')[0]: 0 for d in active}
+    scores = {d: 0 for d in active}
+    total_games = {d: 0 for d in active}
     for da in current_pw:
+        if da not in scores:
+            continue
         for db in current_pw[da]:
             scores[da] += current_pw[da][db][0]
             total_games[da] += current_pw[da][db][1]
@@ -649,11 +785,11 @@ def run_continuous_match():
             
     # Quick live leaderboard update
     if wins_a > wins_b:
-        res_str = f"**Deck {id_a}** vs Deck {id_b} -> **{wins_a}:{wins_b}**"
+        res_str = f"**{id_a}** vs {id_b} -> **{wins_a}:{wins_b}**"
     elif wins_b > wins_a:
-        res_str = f"Deck {id_a} vs **Deck {id_b}** -> **{wins_b}:{wins_a}**"
+        res_str = f"{id_a} vs **{id_b}** -> **{wins_b}:{wins_a}**"
     else:
-        res_str = f"Deck {id_a} vs Deck {id_b} -> Unentschieden ({wins_a}:{wins_b})"
+        res_str = f"{id_a} vs {id_b} -> Unentschieden ({wins_a}:{wins_b})"
         
     # You can keep track of recent match results by appending it to a file
     # For now we just print it
@@ -663,8 +799,11 @@ def run_continuous_match():
     update_live_leaderboard(final_winrates, 1, 1, "Fortlaufende Arena", [res_str])
     
     # Small pause
-    import time
     time.sleep(1)
+    
+    maybe_run_auto_filter(15, "continuous arena")
+    
+
 
 def champion_bonus_training():
     active = get_active_decks()
@@ -680,8 +819,8 @@ def champion_bonus_training():
     
     deck = f"decks/deck_{best_deck_id}.csv"
     opp_deck = f"decks/deck_{opp_id}.csv"
-    model_name = f"ppo_deck_{best_deck_id}"
-    opp_model_path = f"models/ppo_deck_{opp_id}.zip"
+    model_name = resolve_deck_model_base(best_deck_id)
+    opp_model_path = resolve_deck_model_path(opp_id)
     
     print(f"\n--- 👑 Champion Bonus Training ---")
     print(f"Deck {best_deck_id} (Rank 1) receives 100k extra steps against Deck {opp_id} (Rank 2)!")
@@ -701,7 +840,7 @@ def champion_bonus_training():
         "--timesteps", str(TIMESTEPS_PER_GEN),
         "--opp-deck", opp_deck
     ]
-    if os.path.exists(opp_model_path):
+    if opp_model_path:
         cmd.extend(["--opp-model", opp_model_path])
         
     subprocess.run(cmd)
@@ -733,16 +872,14 @@ def eliminate_weakest(scores):
     for deck_id, elo in eliminated:
         print(f"Eliminating Deck {deck_id} (Elo: {int(elo)})")
         csv_path = f"decks/deck_{deck_id}.csv"
-        zip_path = f"models/ppo_deck_{deck_id}.zip"
         
         os.makedirs("decks/ghost_pool", exist_ok=True)
         os.makedirs("models/ghost_pool", exist_ok=True)
         
         ghost_csv = f"decks/ghost_pool/deck_{deck_id}.csv"
-        ghost_zip = f"models/ghost_pool/ppo_deck_{deck_id}.zip"
         
         if os.path.exists(csv_path): 
             os.rename(csv_path, ghost_csv)
-        if os.path.exists(zip_path): 
+        for zip_path in list(iter_existing_deck_model_paths(deck_id)):
+            ghost_zip = os.path.join("models/ghost_pool", os.path.basename(zip_path))
             os.rename(zip_path, ghost_zip)
-

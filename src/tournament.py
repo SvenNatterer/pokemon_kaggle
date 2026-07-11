@@ -1,12 +1,14 @@
 import os
 import sys
 import pandas as pd
+import numpy as np
 
 # Add src to pythonpath so imports work
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.env_wrapper import PokemonTCGEnv
+from src.env_wrapper import PokemonTCGEnv, _fit_observation_to_model_space
 from src.custom_ppo import CustomPPO
+from src.model_paths import discover_deck_models, resolve_deck_model_path
 
 def read_deck(deck_path):
     df = pd.read_csv(deck_path, header=None)
@@ -37,8 +39,14 @@ def evaluate_vs_baseline(model_path, deck_path, num_games=10):
             return CustomPPO.load(path, env=env)
         except Exception as e:
             if env:
-                return PPO.load(path, env=env)
-            return PPO.load(path)
+                try:
+                    return PPO.load(path, env=env)
+                except Exception:
+                    pass
+            try:
+                return CustomPPO.load(path)
+            except Exception:
+                return PPO.load(path)
             
     model = load_model_smart(model_path, env=env)
     
@@ -46,12 +54,25 @@ def evaluate_vs_baseline(model_path, deck_path, num_games=10):
     for i in range(num_games):
         obs, info = env.reset()
         done = False
+        lstm_state = None
+        episode_start = np.ones((1,), dtype=bool)
+        model_space = getattr(model, "observation_space", None)
         while not done:
-            action, _states = model.predict(obs, deterministic=True)
+            if model_space is not None:
+                obs_for_model = _fit_observation_to_model_space(obs, model_space)
+            else:
+                obs_for_model = obs
+            action, lstm_state = model.predict(
+                obs_for_model,
+                state=lstm_state,
+                episode_start=episode_start,
+                deterministic=True,
+            )
+            episode_start = np.zeros((1,), dtype=bool)
             obs, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             
-        if reward > 0:
+        if info.get("winner") == 0:
             wins += 1
             
     return wins
@@ -66,14 +87,15 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
             return CustomPPO.load(path, env=env)
         except Exception as e:
             if env:
-                return PPO.load(path, env=env)
-            return PPO.load(path)
+                try:
+                    return PPO.load(path, env=env)
+                except Exception:
+                    pass
+            try:
+                return CustomPPO.load(path)
+            except Exception:
+                return PPO.load(path)
 
-    model2 = load_model_smart(model2_path)
-    
-    env = PokemonTCGEnv(my_deck=deck1, opponent_deck=deck2, opponent_model_path=model2_path)
-    model1 = load_model_smart(model1_path, env=env)
-    
     wins = 0
     losses = 0
     draws = 0
@@ -85,42 +107,132 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
     deckout_wins_2 = 0
     benchout_wins_2 = 0
     
-    for i in range(num_games):
-        obs, info = env.reset()
-        done = False
-        final_info = {}
-        while not done:
-            action, _states = model1.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
-            done = terminated or truncated
-            final_info = info
-            
-        reason = final_info.get('win_reason', 'other')
-            
-        if reward > 0:
-            wins += 1
-            if reason == 'prize': prize_wins_1 += 1
-            elif reason == 'deckout': deckout_wins_1 += 1
-            elif reason == 'benchout': benchout_wins_1 += 1
-        elif reward < 0:
-            losses += 1
-            if reason == 'prize': prize_wins_2 += 1
-            elif reason == 'deckout': deckout_wins_2 += 1
-            elif reason == 'benchout': benchout_wins_2 += 1
+    def run_direction(
+        learner_model_path,
+        learner_deck,
+        opponent_model_path,
+        opponent_deck,
+        games,
+        learner_perspective,
+    ):
+        nonlocal wins, losses, draws
+        nonlocal prize_wins_1, deckout_wins_1, benchout_wins_1
+        nonlocal prize_wins_2, deckout_wins_2, benchout_wins_2
+
+        if learner_perspective == 0:
+            env = PokemonTCGEnv(
+                my_deck=learner_deck,
+                opponent_deck=opponent_deck,
+                opponent_model_path=opponent_model_path,
+                learner_perspective=0,
+            )
         else:
-            draws += 1
+            env = PokemonTCGEnv(
+                my_deck=opponent_deck,
+                opponent_deck=learner_deck,
+                opponent_model_path=opponent_model_path,
+                learner_perspective=1,
+            )
+            
+        learner_model = load_model_smart(learner_model_path, env=env)
+        model_space = getattr(learner_model, "observation_space", None)
+
+        try:
+            for _ in range(games):
+                obs, info = env.reset()
+                done = False
+                lstm_state = None
+                episode_start = np.ones((1,), dtype=bool)
+                while not done:
+                    obs_for_model = (
+                        _fit_observation_to_model_space(obs, model_space)
+                        if model_space is not None else obs
+                    )
+                    action, lstm_state = learner_model.predict(
+                        obs_for_model,
+                        state=lstm_state,
+                        episode_start=episode_start,
+                        deterministic=True,
+                    )
+                    episode_start = np.zeros((1,), dtype=bool)
+                    obs, _, terminated, truncated, info = env.step(action)
+                    done = terminated or truncated
+
+                engine_winner = info.get("winner", -1)
+                reason = info.get("win_reason", "other")
+                candidate_won = (engine_winner == learner_perspective)
+                reference_won = (engine_winner == 1 - learner_perspective)
+
+                if candidate_won:
+                    wins += 1
+                    if reason == "prize": prize_wins_1 += 1
+                    elif reason == "deckout": deckout_wins_1 += 1
+                    elif reason == "benchout": benchout_wins_1 += 1
+                elif reference_won:
+                    losses += 1
+                    if reason == "prize": prize_wins_2 += 1
+                    elif reason == "deckout": deckout_wins_2 += 1
+                    elif reason == "benchout": benchout_wins_2 += 1
+                else:
+                    draws += 1
+        finally:
+            env.close()
+
+    games_as_player_0 = (num_games + 1) // 2
+    games_as_player_1 = num_games // 2
+
+    run_direction(
+        model1_path,
+        deck1,
+        model2_path,
+        deck2,
+        games_as_player_0,
+        learner_perspective=0,
+    )
+    if games_as_player_1:
+        run_direction(
+            model1_path,
+            deck1,
+            model2_path,
+            deck2,
+            games_as_player_1,
+            learner_perspective=1,
+        )
             
     return wins, losses, draws, prize_wins_1, deckout_wins_1, benchout_wins_1, prize_wins_2, deckout_wins_2, benchout_wins_2
 
+
+def discover_tournament_entries():
+    entries = []
+    for model in discover_deck_models():
+        deck_path = f"decks/deck_{model['deck_id']}.csv"
+        if not os.path.exists(deck_path):
+            continue
+
+        label = model["name"]
+        entries.append({
+            "label": label,
+            "model_path": model["path"],
+            "deck_path": deck_path,
+        })
+
+    return entries
+
+
 def main():
-    decks = [f"decks/deck_{i}.csv" for i in range(1, 9)]
-    models = [f"models/ppo_deck_{i}.zip" for i in range(1, 9)]
-    deck_names = [
-        "Lillie's Clefairy", "Dragapult Dusknoir", "Slowking", "Ogerpon Box",
-        "Crustle", "Dragapult Blaziken", "Rocket's Mewtwo", "Dragapult"
-    ]
+    entries = discover_tournament_entries()
+    if not entries:
+        fallback_ids = range(1, 9)
+        entries = [
+            {
+                "label": f"ppo_deck_{i}",
+                "model_path": resolve_deck_model_path(i) or f"models/ppo_deck_{i}.zip",
+                "deck_path": f"decks/deck_{i}.csv",
+            }
+            for i in fallback_ids
+        ]
     
-    scores = {name: 0 for name in deck_names}
+    scores = {entry["label"]: 0 for entry in entries}
     
     print("======================================================")
     print("🏆 POKEMON TCG AGENT TOURNAMENT 🏆")
@@ -129,11 +241,11 @@ def main():
     # We will evaluate each agent's winrate over 20 games against the baseline
     num_eval_games = 20
     
-    for i in range(len(models)):
-        print(f"\nTesting {deck_names[i]} ({models[i]})...")
-        wins = evaluate_vs_baseline(models[i], decks[i], num_eval_games)
+    for entry in entries:
+        print(f"\nTesting {entry['label']} ({entry['model_path']})...")
+        wins = evaluate_vs_baseline(entry["model_path"], entry["deck_path"], num_eval_games)
         win_rate = (wins / num_eval_games) * 100
-        scores[deck_names[i]] = win_rate
+        scores[entry["label"]] = win_rate
         print(f"-> Win rate: {win_rate}% ({wins}/{num_eval_games})")
         
     print("\n======================================================")

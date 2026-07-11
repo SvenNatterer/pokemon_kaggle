@@ -3,12 +3,13 @@ import sys
 import json
 
 import argparse
+import numpy as np
 
 # Add src to pythonpath so imports work
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from stable_baselines3 import PPO
-from src.env_wrapper import PokemonTCGEnv, read_sample_deck
+from src.env_wrapper import PokemonTCGEnv, _fit_observation_to_model_space, read_sample_deck
 from cg.game import visualize_data
 import pandas as pd
 
@@ -31,8 +32,14 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
             return CustomPPO.load(path, env=env)
         except Exception as e:
             if env:
-                return PPO.load(path, env=env)
-            return PPO.load(path)
+                try:
+                    return PPO.load(path, env=env)
+                except Exception:
+                    pass
+            try:
+                return CustomPPO.load(path)
+            except Exception:
+                return PPO.load(path)
             
     model = None
     if model_a_path and os.path.exists(model_a_path):
@@ -50,9 +57,22 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
     print("Simulating game...")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     try:
+        model_space = getattr(model, "observation_space", None)
+        lstm_state = None
+        episode_start = np.ones((1,), dtype=bool)
         while not done:
             if model is not None:
-                action, _states = model.predict(obs, deterministic=False)
+                if model_space is not None:
+                    obs_for_model = _fit_observation_to_model_space(obs, model_space)
+                else:
+                    obs_for_model = obs
+                action, lstm_state = model.predict(
+                    obs_for_model,
+                    state=lstm_state,
+                    episode_start=episode_start,
+                    deterministic=False,
+                )
+                episode_start = np.zeros((1,), dtype=bool)
             else:
                 valid_actions = [i for i, mask in enumerate(obs["action_mask"]) if mask == 1]
                 import random
@@ -72,12 +92,13 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
                         try:
                             with open("decks/deck_names.json", "r") as f:
                                 names = json.load(f)
-                                if "deck_" in deck_a_path:
-                                    ida = deck_a_path.split('_')[-1].split('.')[0]
-                                    deck_name_a = f"D{ida} " + names.get(ida, "Unknown")
-                                if "deck_" in deck_b_path:
-                                    idb = deck_b_path.split('_')[-1].split('.')[0]
-                                    deck_name_b = f"D{idb} " + names.get(idb, "Unknown")
+                                bname_a = os.path.basename(deck_a_path)[:-4]
+                                ida = bname_a[5:] if bname_a.startswith("deck_") else bname_a
+                                deck_name_a = f"D{ida.replace('bank_', '')} " + names.get(ida, "Unknown")
+                                
+                                bname_b = os.path.basename(deck_b_path)[:-4]
+                                idb = bname_b[5:] if bname_b.startswith("deck_") else bname_b
+                                deck_name_b = f"D{idb.replace('bank_', '')} " + names.get(idb, "Unknown")
                         except: pass
                     data[0]["metadata"] = {"p0_name": deck_name_a, "p1_name": deck_name_b}
                     # print(f"Writing {len(json_data)} bytes...")
@@ -108,12 +129,13 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
                 try:
                     with open("decks/deck_names.json", "r") as f:
                         names = json.load(f)
-                        if "deck_" in deck_a_path:
-                            ida = deck_a_path.split('_')[-1].split('.')[0]
-                            deck_name_a = f"D{ida} " + names.get(ida, "Unknown")
-                        if "deck_" in deck_b_path:
-                            idb = deck_b_path.split('_')[-1].split('.')[0]
-                            deck_name_b = f"D{idb} " + names.get(idb, "Unknown")
+                        bname_a = os.path.basename(deck_a_path)[:-4]
+                        ida = bname_a[5:] if bname_a.startswith("deck_") else bname_a
+                        deck_name_a = f"D{ida.replace('bank_', '')} " + names.get(ida, "Unknown")
+                        
+                        bname_b = os.path.basename(deck_b_path)[:-4]
+                        idb = bname_b[5:] if bname_b.startswith("deck_") else bname_b
+                        deck_name_b = f"D{idb.replace('bank_', '')} " + names.get(idb, "Unknown")
                 except: pass
             
             data[0]["metadata"] = {"p0_name": deck_name_a, "p1_name": deck_name_b}
@@ -134,7 +156,7 @@ if __name__ == "__main__":
     parser.add_argument("--deck-a", type=str, default="")
     parser.add_argument("--model-b", type=str, default="")
     parser.add_argument("--deck-b", type=str, default="")
-    parser.add_argument("--out", type=str, default="PTCG_ABCS_Visualizer/replay.json")
+    parser.add_argument("--out", type=str, default="replays/replay.json")
     args = parser.parse_args()
     
     out_path = args.out
@@ -142,4 +164,3 @@ if __name__ == "__main__":
         out_path = os.path.join(os.path.dirname(__file__), "..", out_path)
         
     generate_replay(args.model_a, args.deck_a, args.model_b, args.deck_b, out_path)
-

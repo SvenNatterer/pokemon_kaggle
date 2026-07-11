@@ -1,5 +1,6 @@
 import os
 import sys
+import numpy as np
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -26,14 +27,26 @@ def evaluate():
     for ep in range(num_episodes):
         obs, _ = env.reset()
         done = False
+        lstm_state = None
+        episode_start = np.ones((1,), dtype=bool)
         while not done:
-            action, _ = model.predict(obs, deterministic=True)
+            try:
+                action, lstm_state = model.predict(
+                    obs,
+                    state=lstm_state,
+                    episode_start=episode_start,
+                    deterministic=True,
+                )
+                episode_start = np.zeros((1,), dtype=bool)
+            except TypeError:
+                action, _ = model.predict(obs, deterministic=True)
             obs, reward, done, truncated, info = env.step(action)
             
-        if reward > 0:
+        winner = info.get("winner", -1)
+        if winner == 0:
             print(f"Episode {ep+1}: Win!")
             wins += 1
-        elif reward < 0:
+        elif winner == 1:
             print(f"Episode {ep+1}: Loss")
         else:
             print(f"Episode {ep+1}: Draw")

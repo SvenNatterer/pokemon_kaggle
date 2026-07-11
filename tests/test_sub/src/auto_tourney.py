@@ -689,7 +689,7 @@ def main():
             sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
             best_deck_id = sorted_scores[0][0]
             print(f"\n--- Generating Replay for League Leader (Deck {best_deck_id}) ---")
-            replay_dir = "PTCG_ABCS_Visualizer/replays"
+            replay_dir = "replays"
             os.makedirs(replay_dir, exist_ok=True)
             out_file = f"{replay_dir}/gen_{generation}_leader_deck_{best_deck_id}.json"
             

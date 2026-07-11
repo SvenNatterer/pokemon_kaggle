@@ -26,8 +26,7 @@ def kill_tourney():
             tourney_process.kill()
         tourney_process = None
     
-    # Also aggressively kill any lingering train.py or evaluate.py processes
-    subprocess.run("pkill -f 'python src/train.py'", shell=True)
+    # Also aggressively kill any lingering evaluate.py or auto_tourney processes
     subprocess.run("pkill -f 'python src/evaluate_single.py'", shell=True)
     subprocess.run("pkill -f 'python src/auto_tourney.py'", shell=True)
 
@@ -74,7 +73,7 @@ def reset():
     find decks -name "deck_*.csv" ! -name "deck_1.csv" ! -name "deck_2.csv" ! -name "deck_3.csv" ! -name "deck_4.csv" ! -name "deck_5.csv" -type f -delete
     find models -name "*.zip" ! -name "ppo_base_brain.zip" -type f -delete
     rm -f decks/pairwise_winrates.json decks/games_played.json decks/current_generation_winrates.json
-    rm -f PTCG_ABCS_Visualizer/replays/*.json
+    rm -f replays/*.json
     echo '{"generation": 1}' > decks/generation.json
     rm -f decks/status.json
     """

@@ -254,6 +254,9 @@ td:last-child {
     gap: 10px;
 }
 .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     padding: 8px 16px;
     border: none;
     border-radius: 6px;
@@ -287,6 +290,93 @@ td:last-child {
     background: rgba(255, 60, 60, 0.2);
     color: #ff6b6b;
     border: 1px solid rgba(255, 60, 60, 0.3);
+}
+
+.section-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+.section-head h2 {
+    margin-bottom: 1rem;
+}
+.replay-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 0.75rem;
+}
+.replay-actions a {
+    text-decoration: none;
+}
+.muted-line {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+.replay-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 0.85rem;
+}
+.replay-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 154px;
+    padding: 1rem;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+.replay-item-title {
+    font-weight: 700;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+.replay-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+.replay-pill {
+    padding: 0.2rem 0.5rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border);
+}
+.replay-path {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+.replay-links {
+    display: flex;
+    gap: 0.6rem;
+    margin-top: auto;
+}
+.replay-links a {
+    flex: 1;
+    min-height: 36px;
+    text-decoration: none;
+}
+
+@media (max-width: 700px) {
+    .section-head {
+        flex-direction: column;
+    }
+    .replay-actions,
+    .replay-links {
+        width: 100%;
+    }
+    .replay-actions .btn,
+    .replay-links .btn {
+        flex: 1;
+    }
 }
 
 /* Custom Tooltip */

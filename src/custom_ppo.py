@@ -10,20 +10,55 @@ from sb3_contrib.common.recurrent.type_aliases import RNNStates
 from stable_baselines3.common.utils import explained_variance
 
 class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
-    def __init__(self, *args, **kwargs):
+    def __init__(
+        self,
+        *args,
+        use_belief_actor=False,
+        belief_dim=64,
+        detach_belief_actor=True,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
-        
-        # Add the auxiliary head
-        # In RecurrentMultiInputActorCriticPolicy, we use lstm_actor
+
+        self.use_belief_actor = bool(use_belief_actor)
+        self.belief_dim = int(belief_dim)
+        self.detach_belief_actor = bool(detach_belief_actor)
+
         lstm_hidden_dim = self.lstm_actor.hidden_size
-        self.aux_head = nn.Sequential(
-            nn.Linear(lstm_hidden_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 2000) # aux_dim = 2000
-        )
-        
-        # Add aux head parameters to the existing optimizer
-        self.optimizer.add_param_group({'params': self.aux_head.parameters()})
+        if self.use_belief_actor:
+            self.belief_encoder = nn.Sequential(
+                nn.Linear(lstm_hidden_dim, self.belief_dim),
+                nn.ReLU(),
+            )
+            self.aux_head = nn.Sequential(
+                nn.Linear(self.belief_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, 2000), # aux_dim = 2000
+            )
+
+            old_action_net = self.action_net
+            self.action_net = nn.Linear(old_action_net.in_features + self.belief_dim, old_action_net.out_features)
+            nn.init.orthogonal_(self.action_net.weight, gain=0.01)
+            nn.init.constant_(self.action_net.bias, 0.0)
+
+            initial_lr = self.optimizer.param_groups[0]["lr"]
+            self.optimizer = self.optimizer_class(self.parameters(), lr=initial_lr, **self.optimizer_kwargs)
+        else:
+            # Legacy architecture: keep parameter names/shapes compatible with existing checkpoints.
+            self.aux_head = nn.Sequential(
+                nn.Linear(lstm_hidden_dim, 256),
+                nn.ReLU(),
+                nn.Linear(256, 2000), # aux_dim = 2000
+            )
+            self.optimizer.add_param_group({'params': self.aux_head.parameters()})
+
+    def _actor_latent_with_belief(self, latent_memory, latent_pi_mlp):
+        if not self.use_belief_actor:
+            return latent_pi_mlp, None
+
+        belief_embedding = self.belief_encoder(latent_memory)
+        actor_belief = belief_embedding.detach() if self.detach_belief_actor else belief_embedding
+        return torch.cat([latent_pi_mlp, actor_belief], dim=-1), belief_embedding
 
     def forward(
         self,
@@ -53,8 +88,10 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
             latent_vf = self.critic(vf_features)
             lstm_states_vf = lstm_states_pi
 
+        latent_pi_memory = latent_pi
         latent_pi = self.mlp_extractor.forward_actor(latent_pi)
         latent_vf = self.mlp_extractor.forward_critic(latent_vf)
+        latent_pi, _ = self._actor_latent_with_belief(latent_pi_memory, latent_pi)
 
         # Evaluate the values for the given observations
         values = self.value_net(latent_vf)
@@ -83,6 +120,7 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         features = self.extract_features(obs)
         latent_pi, lstm_states_pi = self._process_sequence(features, lstm_states, episode_starts, self.lstm_actor)
         latent_pi_mlp = self.mlp_extractor.forward_actor(latent_pi)
+        latent_pi_mlp, _ = self._actor_latent_with_belief(latent_pi, latent_pi_mlp)
         
         mean_actions = self.action_net(latent_pi_mlp)
         
@@ -106,6 +144,7 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         # Standard PPO heads
         latent_pi_mlp = self.mlp_extractor.forward_actor(latent_pi)
         latent_vf_mlp = self.mlp_extractor.forward_critic(latent_vf)
+        latent_pi_mlp, belief_embedding = self._actor_latent_with_belief(latent_pi, latent_pi_mlp)
         
         mean_actions = self.action_net(latent_pi_mlp)
         
@@ -118,9 +157,9 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         values = self.value_net(latent_vf_mlp)
         entropy = distribution.entropy()
         
-        # Auxiliary Head (we predict from latent_pi to have access to actor context, or just from lstm output)
-        # We use latent_pi as it contains the processed memory state
-        aux_logits = self.aux_head(latent_pi)
+        # Auxiliary Head: with belief actor enabled, the supervised belief embedding is also fed to the actor.
+        aux_input = belief_embedding if self.use_belief_actor else latent_pi
+        aux_logits = self.aux_head(aux_input)
         
         return values, log_prob, entropy, aux_logits
 
@@ -140,6 +179,7 @@ class CustomPPO(RecurrentPPO):
         
         entropy_losses = []
         pg_losses, value_losses, aux_losses = [], [], []
+        aux_precision_at_20, aux_recall_at_20 = [], []
         clip_fractions = []
 
         continue_training = True
@@ -159,6 +199,10 @@ class CustomPPO(RecurrentPPO):
                 if isinstance(self.action_space, gym.spaces.Discrete):
                     actions = rollout_data.actions.long().flatten()
 
+                # Recurrent rollout batches contain padded sequence steps.
+                # They must be excluded from every PPO statistic and loss term.
+                mask = rollout_data.mask > 1e-8
+
                 # Re-sample the noise matrix because the log_std has changed
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
@@ -175,7 +219,7 @@ class CustomPPO(RecurrentPPO):
                 # Normalize advantage
                 advantages = rollout_data.advantages
                 if self.normalize_advantage:
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                    advantages = (advantages - advantages[mask].mean()) / (advantages[mask].std() + 1e-8)
 
                 # ratio between old and new policy, should be one at the first iteration
                 ratio = torch.exp(log_prob - rollout_data.old_log_prob)
@@ -183,11 +227,11 @@ class CustomPPO(RecurrentPPO):
                 # clipped surrogate loss
                 policy_loss_1 = advantages * ratio
                 policy_loss_2 = advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
-                policy_loss = -torch.min(policy_loss_1, policy_loss_2).mean()
+                policy_loss = -torch.min(policy_loss_1, policy_loss_2)[mask].mean()
 
                 # Logging
                 pg_losses.append(policy_loss.item())
-                clip_fraction = torch.mean((torch.abs(ratio - 1) > clip_range).float()).item()
+                clip_fraction = torch.mean((torch.abs(ratio - 1) > clip_range).float()[mask]).item()
                 clip_fractions.append(clip_fraction)
 
                 if self.clip_range_vf is None:
@@ -201,22 +245,49 @@ class CustomPPO(RecurrentPPO):
                     )
                 
                 # Value loss using the TD(lambda) target
-                value_loss = F.mse_loss(rollout_data.returns, values_pred)
+                value_loss = F.mse_loss(rollout_data.returns[mask], values_pred[mask])
                 value_losses.append(value_loss.item())
 
                 # Entropy loss favor exploration
                 if entropy is None:
                     # Approximate entropy when no analytical form
-                    entropy_loss = -torch.mean(-log_prob)
+                    entropy_loss = -torch.mean(-log_prob[mask])
                 else:
-                    entropy_loss = -torch.mean(entropy)
+                    entropy_loss = -torch.mean(entropy[mask])
 
                 entropy_losses.append(entropy_loss.item())
 
                 # Auxiliary Loss (BCEWithLogitsLoss)
                 aux_target = rollout_data.observations['aux_target']
-                bce_loss = F.binary_cross_entropy_with_logits(aux_logits, aux_target)
+                valid_aux_logits = aux_logits[mask]
+                valid_aux_target = aux_target[mask]
+                positive_count = valid_aux_target.sum()
+                negative_count = valid_aux_target.numel() - positive_count
+                positive_weight = torch.clamp(
+                    negative_count / torch.clamp(positive_count, min=1.0),
+                    min=1.0,
+                    max=50.0,
+                )
+                aux_element_loss = F.binary_cross_entropy_with_logits(
+                    valid_aux_logits,
+                    valid_aux_target,
+                    reduction="none",
+                )
+                aux_weights = torch.where(
+                    valid_aux_target > 0.5,
+                    positive_weight,
+                    torch.ones_like(valid_aux_target),
+                )
+                bce_loss = (aux_element_loss * aux_weights).sum() / aux_weights.sum().clamp_min(1.0)
                 aux_losses.append(bce_loss.item())
+
+                with torch.no_grad():
+                    top_k = min(20, valid_aux_logits.shape[-1])
+                    top_indices = torch.topk(valid_aux_logits, k=top_k, dim=-1).indices
+                    top_hits = torch.gather(valid_aux_target, 1, top_indices).sum(dim=1)
+                    aux_precision_at_20.append((top_hits / top_k).mean().item())
+                    positives_per_step = valid_aux_target.sum(dim=1).clamp_min(1.0)
+                    aux_recall_at_20.append((top_hits / positives_per_step).mean().item())
 
                 loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.c_aux * bce_loss
 
@@ -226,7 +297,7 @@ class CustomPPO(RecurrentPPO):
                 # and Schulman blog: http://joschu.net/blog/kl-approx.html
                 with torch.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
-                    approx_kl_div = torch.mean((torch.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
+                    approx_kl_div = torch.mean(((torch.exp(log_ratio) - 1) - log_ratio)[mask]).cpu().numpy()
                     approx_kl_divs.append(approx_kl_div)
 
                 if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
@@ -242,10 +313,10 @@ class CustomPPO(RecurrentPPO):
                 torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.policy.optimizer.step()
 
+            self._n_updates += 1
             if not continue_training:
                 break
 
-        self._n_updates += self.n_epochs
         explained_var = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
 
         # Logs
@@ -253,6 +324,8 @@ class CustomPPO(RecurrentPPO):
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/aux_loss", np.mean(aux_losses))
+        self.logger.record("train/aux_precision_at_20", np.mean(aux_precision_at_20))
+        self.logger.record("train/aux_recall_at_20", np.mean(aux_recall_at_20))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
         self.logger.record("train/clip_fraction", np.mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
@@ -261,7 +334,6 @@ class CustomPPO(RecurrentPPO):
             self.logger.record("train/std", torch.exp(self.policy.log_std).mean().item())
 
         self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
-        self.logger.record("train/clip_range", self.clip_range)
+        self.logger.record("train/clip_range", clip_range)
         if self.clip_range_vf is not None:
             self.logger.record("train/clip_range_vf", self.clip_range_vf)
-
