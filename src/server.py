@@ -11,8 +11,8 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(BASE_DIR)
 
 from src.arena_control import ArenaController
-from src.arena_core import ArenaStore, EVALUATION_FILE, atomic_write_json, discover_participants, rank_participants, read_json, utc_now
-from src.arena_match import load_holdout_results
+from src.arena_core import ArenaStore, EVALUATION_FILE, atomic_write_json, deck_id_for_path, discover_participants, rank_participants, read_json, utc_now
+from src.arena_match import load_holdout_results, schedule_replay
 from src.model_paths import resolve_deck_model_base, resolve_deck_model_path
 
 app = Flask(__name__, static_folder=BASE_DIR)
@@ -21,6 +21,8 @@ train_process = None
 evaluation_process = None
 arena_store = ArenaStore()
 arena_controller = ArenaController(arena_store)
+DECK_NAMES_FILE = os.path.join(BASE_DIR, "decks", "deck_names.json")
+CHAMPION_FILE = os.path.join(BASE_DIR, "models", "champion.json")
 
 @app.after_request
 def add_cors_headers(response):
@@ -43,6 +45,10 @@ def status():
     participants = discover_participants()
     matches = arena_store.matches()
     board = rank_participants(participants, matches, load_holdout_results())
+    champion = read_json(CHAMPION_FILE, {})
+    champion_id = str(champion.get("candidate", ""))
+    for row in board:
+        row["is_champion"] = row["bot_id"] == champion_id
     evaluation = read_json(EVALUATION_FILE, {"state": "idle"})
     arena = arena_controller.status()
     return jsonify({
@@ -54,6 +60,7 @@ def status():
         "current_match": arena.get("current_match"),
         "recent_matches": matches[-20:][::-1],
         "evaluation": evaluation,
+        "champion": champion,
         "errors": [participant.to_dict() for participant in participants if participant.load_status != "loadable"],
     })
 
@@ -117,6 +124,22 @@ def leaderboard():
 def participants():
     values = discover_participants()
     return jsonify({"participants": [value.to_dict() for value in values]})
+
+
+@app.route('/api/deck-names', methods=['POST'])
+def set_deck_name():
+    data = request.get_json(silent=True) or {}
+    deck_path = str(data.get("deck_path") or "").replace("\\", "/")
+    name = str(data.get("name") or "").strip()
+    if not deck_path.startswith("decks/") or not deck_path.endswith(".csv"):
+        return jsonify({"success": False, "message": "A valid deck path is required."}), 400
+    if not name or len(name) > 80:
+        return jsonify({"success": False, "message": "Deck name must contain 1 to 80 characters."}), 400
+    names = read_json(DECK_NAMES_FILE, {})
+    names = names if isinstance(names, dict) else {}
+    names[deck_id_for_path(deck_path)] = name
+    atomic_write_json(DECK_NAMES_FILE, names)
+    return jsonify({"success": True, "message": "Deck name saved."})
 
 @app.route('/api/available_decks', methods=['GET'])
 def get_available_decks():
@@ -214,34 +237,88 @@ def get_replays():
     return jsonify({"replays": replays})
 
 
+@app.route('/api/replays/generate', methods=['POST'])
+def generate_replay():
+    data = request.get_json(silent=True) or {}
+    selected_ids = {str(bot_id) for bot_id in data.get("bot_ids", []) if str(bot_id)}
+    if not selected_ids:
+        return jsonify({"success": False, "message": "Select at least one bot for replay generation."}), 400
+
+    participants = discover_participants()
+    available = [item for item in participants if item.enabled and item.load_status == "loadable"]
+    if len(available) < 2:
+        return jsonify({"success": False, "message": "At least two loadable bots are required."}), 400
+
+    board = {row["bot_id"]: row for row in rank_participants(participants, arena_store.matches(), load_holdout_results())}
+    ranked = [item for item in sorted(available, key=lambda item: board.get(item.bot_id, {}).get("rank", 10**9))]
+    selected = [item for item in ranked if item.bot_id in selected_ids]
+    if not selected:
+        return jsonify({"success": False, "message": "No selected loadable bots found."}), 400
+
+    replay_refs = []
+    timestamp = int(time.time())
+    for bot_a in selected:
+        bot_b = next((item for item in ranked if item.bot_id != bot_a.bot_id), None)
+        if bot_b is not None:
+            replay_refs.append(schedule_replay(bot_a, bot_b, f"manual_{timestamp}_{bot_a.bot_id}"))
+    return jsonify({"success": True, "message": f"Started {len(replay_refs)} replay(s).", "replay_refs": replay_refs})
+
+
 @app.route('/api/evaluation/start', methods=['POST'])
 def start_evaluation():
     global evaluation_process
     if evaluation_process is not None and evaluation_process.poll() is None:
         return jsonify({"success": False, "message": "An evaluation is already running."}), 409
     data = request.get_json(silent=True) or {}
-    bot_id = str(data.get("bot_id") or "")
+    bot_ids = [str(value) for value in data.get("bot_ids", []) if str(value)]
+    if not bot_ids and data.get("bot_id"):
+        bot_ids = [str(data["bot_id"])]
     games = int(data.get("games", 30))
-    participant = next((item for item in discover_participants() if item.bot_id == bot_id), None)
-    if participant is None or not participant.enabled or participant.load_status != "loadable":
-        return jsonify({"success": False, "message": "Select an enabled, loadable PPO bot."}), 400
-    if participant.bot_type != "ppo" or not participant.model_path:
-        return jsonify({"success": False, "message": "Holdout evaluation currently requires a PPO model."}), 400
+    # Keep direct API callers backwards compatible; the dashboard explicitly
+    # chooses validation as the safe default.
+    mode = str(data.get("mode", "final"))
+    holdout_file = "decks/validation_opponents.json" if mode == "validation" else "decks/holdout_opponents.json"
+    if not os.path.exists(os.path.join(BASE_DIR, holdout_file)):
+        return jsonify({"success": False, "message": f"Missing {mode} manifest: {holdout_file}"}), 400
+    participants = {item.bot_id: item for item in discover_participants()}
+    selected = [participants.get(bot_id) for bot_id in bot_ids]
+    if not selected or any(item is None or not item.enabled or item.load_status != "loadable" or item.bot_type != "ppo" or not item.model_path for item in selected):
+        return jsonify({"success": False, "message": "Select one or more enabled, loadable PPO bots."}), 400
+    bot_id = ",".join(bot_ids)
     if arena_controller.status().get("state") == "running":
         arena_controller.pause()
     os.makedirs(os.path.join(BASE_DIR, "arena_data"), exist_ok=True)
-    evaluation_process = subprocess.Popen(
-        [sys.executable, "-m", "src.evaluation_worker", "--bot-id", bot_id,
-         "--model", participant.model_path, "--games", str(games)],
-        cwd=BASE_DIR, stdout=open(os.path.join(BASE_DIR, "arena_data", "evaluation.log"), "a"),
-        stderr=subprocess.STDOUT,
-    )
-    return jsonify({"success": True, "message": "Holdout evaluation started.", "evaluation": read_json(EVALUATION_FILE, {"state": "starting"})})
+    evaluation_log = open(os.path.join(BASE_DIR, "arena_data", "evaluation.log"), "a")
+    try:
+        evaluation_process = subprocess.Popen(
+            [sys.executable, "-m", "src.evaluation_worker", "--bot-id", bot_id,
+             "--games", str(games), "--holdout-file", holdout_file,
+             *sum((["--model", item.model_path] for item in selected), [])],
+            cwd=BASE_DIR, stdout=evaluation_log, stderr=subprocess.STDOUT,
+        )
+    finally:
+        evaluation_log.close()
+    return jsonify({"success": True, "message": f"{mode.title()} evaluation started for {len(selected)} candidate(s).", "evaluation": read_json(EVALUATION_FILE, {"state": "starting"})})
 
 
 @app.route('/api/evaluation', methods=['GET'])
 def get_evaluation():
     return jsonify(read_json(EVALUATION_FILE, {"state": "idle"}))
+
+@app.route('/api/champion/promote', methods=['POST'])
+def promote_champion():
+    data = request.get_json(silent=True) or {}
+    selection_file = str(data.get("selection_file") or read_json(EVALUATION_FILE, {}).get("selection_file") or "")
+    if not selection_file or not selection_file.startswith("arena_data/"):
+        return jsonify({"success": False, "message": "Run a completed dashboard evaluation before promotion."}), 400
+    command = [sys.executable, "scripts/promote_champion.py", "--selection", selection_file,
+               "--champion-file", "models/champion.json",
+               "--min-wilson-improvement", str(float(data.get("min_wilson_improvement", 0.0))),
+               "--max-perspective-gap", str(float(data.get("max_perspective_gap", 0.10)))]
+    result = subprocess.run(command, cwd=BASE_DIR, capture_output=True, text=True)
+    if result.returncode:
+        return jsonify({"success": False, "message": (result.stderr or result.stdout).strip()}), 400
+    return jsonify({"success": True, "message": (result.stdout or "Champion promoted.").strip(), "champion": read_json(CHAMPION_FILE, {})})
 
 @app.route('/api/train_custom', methods=['POST'])
 def train_custom():

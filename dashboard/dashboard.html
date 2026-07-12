@@ -36,12 +36,12 @@
             <section class="card leaderboard-card">
                 <h2>🏆 Global Leaderboard</h2>
                 <div class="table-container">
-                    <table id="leaderboard-table" style="min-width: 1200px;">
+                    <table id="leaderboard-table" style="min-width: 1280px;">
                         <thead>
                             <tr>
                                 <th>Rank</th>
                                 <th>Bot</th><th>Type</th><th>Score</th><th>Elo</th><th>Arena</th>
-                                <th>Wilson</th><th>W / L / D</th><th>Holdout</th><th>Games</th>
+                                <th>Wilson</th><th>W / L / D</th><th>Holdout</th><th>Games</th><th title="Replay für diesen Bot erzeugen">Replay</th>
                             </tr>
                         </thead>
                         <tbody id="leaderboard-body">
@@ -51,13 +51,17 @@
                 </div>
             </section>
             <section class="card">
-                <div class="section-head"><div><h2>🧪 Holdout Evaluation</h2><p class="subtitle">Separate from arena matches and training.</p></div></div>
+                <div class="section-head"><div><h2>🧪 Evaluation & Champion</h2><p class="subtitle">1) candidates select  2) validation run  3) champion promote  4) final holdout only at the end.</p></div></div>
                 <div class="control-panel">
-                    <select id="evaluation-bot"></select>
+                    <select id="evaluation-bot" multiple size="5" aria-label="Evaluation candidates"></select>
+                    <select id="evaluation-mode" aria-label="Evaluation mode"><option value="validation">Validation (recommended)</option><option value="final">Final holdout</option></select>
                     <input id="evaluation-games" type="number" min="1" value="30" aria-label="Games per holdout opponent">
-                    <button id="btn-evaluate" class="btn btn-primary">Start evaluation</button>
+                    <button id="btn-evaluate" class="btn btn-primary">1. Evaluate</button>
+                    <button id="btn-promote" class="btn btn-secondary">2. Promote champion</button>
                 </div>
+                <p class="subtitle">Für Vergleiche mehrere Modelle mit Cmd/Ctrl auswählen. Nutze 100 Spiele pro Gegner für Entscheidungen.</p>
                 <div id="evaluation-status" class="muted-line">No evaluation running.</div>
+                <div id="champion-status" class="muted-line">No champion selected.</div>
                 <progress id="evaluation-progress" max="1" value="0" style="width:100%"></progress>
             </section>
 
@@ -73,6 +77,7 @@
                         <p class="subtitle">JSON snapshots from <code>visualize_data()</code></p>
                     </div>
                     <div class="replay-actions">
+                        <button id="replay-generate" class="btn btn-primary" type="button" disabled>Replays erzeugen</button>
                         <button id="replay-refresh" class="btn btn-secondary" type="button">Refresh</button>
                         <!-- HERoz launcher removed -->
                     </div>

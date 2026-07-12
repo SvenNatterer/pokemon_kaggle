@@ -79,6 +79,12 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
     benchout_wins_2 = 0
     total_turns = 0
     reason_counts = {}
+    candidate_win_reasons = {}
+    opponent_win_reasons = {}
+    perspective_results = {
+        "player_0": {"games": 0, "wins": 0, "losses": 0, "draws": 0, "turns": 0},
+        "player_1": {"games": 0, "wins": 0, "losses": 0, "draws": 0, "turns": 0},
+    }
     
     def run_direction(
         learner_model_path,
@@ -135,6 +141,9 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
                     done = terminated or truncated
 
                 total_turns += turns
+                perspective = perspective_results[f"player_{learner_perspective}"]
+                perspective["games"] += 1
+                perspective["turns"] += turns
 
                 engine_winner = info.get("winner", -1)
                 reason = info.get("win_reason", "other")
@@ -144,16 +153,21 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
 
                 if candidate_won:
                     wins += 1
+                    perspective["wins"] += 1
+                    candidate_win_reasons[reason] = candidate_win_reasons.get(reason, 0) + 1
                     if reason == "prize": prize_wins_1 += 1
                     elif reason == "deckout": deckout_wins_1 += 1
                     elif reason == "benchout": benchout_wins_1 += 1
                 elif reference_won:
                     losses += 1
+                    perspective["losses"] += 1
+                    opponent_win_reasons[reason] = opponent_win_reasons.get(reason, 0) + 1
                     if reason == "prize": prize_wins_2 += 1
                     elif reason == "deckout": deckout_wins_2 += 1
                     elif reason == "benchout": benchout_wins_2 += 1
                 else:
                     draws += 1
+                    perspective["draws"] += 1
         finally:
             env.close()
 
@@ -180,7 +194,17 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
             
     result = (wins, losses, draws, prize_wins_1, deckout_wins_1, benchout_wins_1, prize_wins_2, deckout_wins_2, benchout_wins_2)
     if return_details:
-        return result, {"total_turns": total_turns, "reason_counts": reason_counts}
+        for values in perspective_results.values():
+            games = values["games"]
+            values["mean_turns"] = values["turns"] / games if games else 0.0
+        return result, {
+            "total_turns": total_turns,
+            "mean_turns": total_turns / num_games if num_games else 0.0,
+            "reason_counts": reason_counts,
+            "candidate_win_reasons": candidate_win_reasons,
+            "opponent_win_reasons": opponent_win_reasons,
+            "perspective": perspective_results,
+        }
     return result
 
 

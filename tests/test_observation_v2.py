@@ -4,8 +4,17 @@ import numpy as np
 import torch
 
 from src.cg.api import AreaType, OptionType, all_card_data
-from src.custom_policy import PokemonTCGFeatureExtractor, build_card_metadata
-from src.env_wrapper import PokemonTCGEnv
+from src.custom_policy import (
+    EFFECT_INDEX,
+    ENERGY_FEATURE_OFFSET,
+    ENERGY_ROLE_NAMES,
+    ENERGY_TYPE_COUNT,
+    PokemonTCGFeatureExtractor,
+    build_card_metadata,
+    build_card_relations,
+    _effect_metadata,
+)
+from src.env_wrapper import PokemonTCGEnv, encode_hidden_card_count
 
 
 def _player(hand=None, active=None, bench=None):
@@ -49,6 +58,87 @@ def test_card_metadata_contains_rule_attributes():
     assert metadata[int(card.cardId), 8] == int(card.hp) / 400.0
 
 
+def test_hidden_card_count_target_preserves_duplicate_counts():
+    encoded = [encode_hidden_card_count(count) for count in (0, 1, 2, 4, 20, 60)]
+
+    assert encoded[0] == 0.0
+    assert all(left < right for left, right in zip(encoded, encoded[1:]))
+    assert encoded[-1] == 1.0
+
+
+def test_rules_text_is_encoded_as_factual_effect_features():
+    features = _effect_metadata(
+        "Discard 2 cards from your hand. Search your deck for up to 1 Pokémon. "
+        "Then, draw 3 cards and heal 40 damage."
+    )
+
+    assert features[EFFECT_INDEX["draw"]] == 1.0
+    assert features[EFFECT_INDEX["draw_amount"]] == 0.3
+    assert features[EFFECT_INDEX["search_deck"]] == 1.0
+    assert features[EFFECT_INDEX["search_pokemon"]] == 1.0
+    assert features[EFFECT_INDEX["discard"]] == 1.0
+    assert features[EFFECT_INDEX["discard_from_hand"]] == 1.0
+    assert features[EFFECT_INDEX["heal"]] == 1.0
+    assert features[EFFECT_INDEX["heal_amount"]] == 0.1
+
+
+def test_energy_symbols_are_encoded_by_effect_role():
+    features = _effect_metadata(
+        "Search your deck for a Basic {F} Energy card. Attach a {P} Energy card "
+        "from your discard pile. This card provides every type of Energy."
+    )
+
+    def energy_feature(role, energy_type):
+        return ENERGY_FEATURE_OFFSET + ENERGY_ROLE_NAMES.index(role) * ENERGY_TYPE_COUNT + energy_type
+
+    assert features[energy_feature("searched", 6)] == 1.0
+    assert features[energy_feature("attached", 5)] == 1.0
+    assert features[energy_feature("provided", 10)] == 1.0
+    assert features[energy_feature("discarded_or_moved", 5)] == 0.0
+
+
+def test_damage_formula_and_category_condition_are_structured():
+    features = _effect_metadata(
+        "This attack does 30 damage for each of your Ancient Pokémon in play."
+    )
+
+    assert features[EFFECT_INDEX["damage_multiplier"]] == 30 / 400
+    assert features[EFFECT_INDEX["condition_ancient"]] == 1.0
+    assert features[EFFECT_INDEX["owner_self"]] == 1.0
+
+
+def test_temporary_restrictions_and_damage_modifiers_are_structured():
+    cannot_attack = _effect_metadata("During your next turn, this Pokémon can't use attacks.")
+    cannot_retreat = _effect_metadata(
+        "During your opponent's next turn, the Defending Pokémon can't retreat."
+    )
+    self_damage = _effect_metadata("This Pokémon also does 50 damage to itself.")
+    reduction = _effect_metadata("This Pokémon takes 30 less damage from attacks.")
+
+    assert cannot_attack[EFFECT_INDEX["cannot_attack"]] == 1.0
+    assert cannot_attack[EFFECT_INDEX["turn_duration"]] == 0.2
+    assert cannot_retreat[EFFECT_INDEX["cannot_retreat"]] == 1.0
+    assert cannot_retreat[EFFECT_INDEX["owner_opponent"]] == 1.0
+    assert self_damage[EFFECT_INDEX["self_damage"]] == 50 / 400
+    assert reduction[EFFECT_INDEX["damage_reduction"]] == 30 / 400
+
+
+def test_copy_attack_and_ordered_deck_operations_are_structured():
+    copied = _effect_metadata(
+        "Choose 1 of your Benched N's Pokémon's attacks and use it as this attack."
+    )
+    ordered = _effect_metadata(
+        "Look at the top 5 cards of your deck and put the remaining cards "
+        "on the bottom of your deck in any order."
+    )
+
+    assert copied[EFFECT_INDEX["copy_attack"]] == 1.0
+    assert copied[EFFECT_INDEX["target_bench"]] == 1.0
+    assert ordered[EFFECT_INDEX["deck_top"]] == 1.0
+    assert ordered[EFFECT_INDEX["deck_bottom"]] == 1.0
+    assert ordered[EFFECT_INDEX["preserve_order"]] == 1.0
+
+
 def test_structured_feature_extractor_output_shape():
     env = PokemonTCGEnv([6] * 60, [5] * 60)
     extractor = PokemonTCGFeatureExtractor(env.observation_space, features_dim=256)
@@ -68,6 +158,28 @@ def test_structured_feature_extractor_output_shape():
 
     assert features.shape == (1, 256)
     assert torch.isfinite(features).all()
+
+
+def test_card_relations_include_attacks_skills_and_evolution_names():
+    attack_ids, skill_ids, _, own_names, evolves_from, _ = build_card_relations()
+    cards = [card for card in all_card_data() if 0 < int(card.cardId) < 2000]
+    card_with_attack = next(card for card in cards if getattr(card, "attacks", None))
+    card_with_skill = next(card for card in cards if getattr(card, "skills", None))
+    evolved = next(card for card in cards if getattr(card, "evolvesFrom", None))
+
+    assert attack_ids[int(card_with_attack.cardId), 0] == int(card_with_attack.attacks[0])
+    assert skill_ids[int(card_with_skill.cardId), 0] > 0
+    assert own_names[int(evolved.cardId)] > 0
+    assert evolves_from[int(evolved.cardId)] > 0
+
+
+def test_count_aware_pooling_distinguishes_duplicate_cards():
+    env = PokemonTCGEnv([6] * 60, [5] * 60)
+    extractor = PokemonTCGFeatureExtractor(env.observation_space, features_dim=256)
+    one = torch.tensor([[6, 0, 0]], dtype=torch.int64)
+    three = torch.tensor([[6, 6, 6]], dtype=torch.int64)
+
+    assert not torch.allclose(extractor._pool_card_set(one), extractor._pool_card_set(three))
 
 
 def test_dense_reward_uses_rotated_learner_perspective():

@@ -69,6 +69,44 @@ class ServerApiTests(unittest.TestCase):
         response = self.client.post("/api/evaluation/start", json={"bot_id": "anything"})
         self.assertEqual(response.status_code, 409)
 
+    def test_champion_promotion_requires_completed_dashboard_evaluation(self):
+        with mock.patch.object(server, "read_json", return_value={"state": "idle"}):
+            response = self.client.post("/api/champion/promote", json={})
+        self.assertEqual(response.status_code, 400)
+
+    def test_replay_generation_requires_a_selected_bot(self):
+        with mock.patch.object(server, "schedule_replay") as schedule:
+            response = self.client.post("/api/replays/generate", json={"bot_ids": []})
+        self.assertEqual(response.status_code, 400)
+        schedule.assert_not_called()
+
+    def test_replay_generation_uses_selected_bot_against_top_other_bot(self):
+        top = Participant("top", "Top", "ppo", "decks/deck_1.csv", "models/ppo_deck_1.zip", load_status="loadable")
+        other = Participant("other", "Other", "ppo", "decks/deck_2.csv", "models/ppo_deck_2.zip", load_status="loadable")
+        with mock.patch.object(server, "discover_participants", return_value=[other, top]), mock.patch.object(
+            server.arena_store, "matches", return_value=[]
+        ), mock.patch.object(server, "load_holdout_results", return_value={}), mock.patch.object(
+            server, "schedule_replay", return_value="replays/arena/test.json"
+        ) as schedule:
+            response = self.client.post("/api/replays/generate", json={"bot_ids": ["other"]})
+        self.assertEqual(response.status_code, 200)
+        schedule.assert_called_once()
+        self.assertEqual(schedule.call_args.args[0].bot_id, "other")
+        self.assertEqual(schedule.call_args.args[1].bot_id, "top")
+
+    def test_replay_generation_creates_one_replay_for_each_selected_bot(self):
+        top = Participant("top", "Top", "ppo", "decks/deck_1.csv", "models/ppo_deck_1.zip", load_status="loadable")
+        selected = Participant("selected", "Selected", "ppo", "decks/deck_2.csv", "models/ppo_deck_2.zip", load_status="loadable")
+        with mock.patch.object(server, "discover_participants", return_value=[selected, top]), mock.patch.object(
+            server.arena_store, "matches", return_value=[]
+        ), mock.patch.object(server, "load_holdout_results", return_value={}), mock.patch.object(
+            server, "schedule_replay", return_value="replays/arena/test.json"
+        ) as schedule:
+            response = self.client.post("/api/replays/generate", json={"bot_ids": ["top", "selected"]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(schedule.call_count, 2)
+        self.assertEqual({call.args[0].bot_id for call in schedule.call_args_list}, {"top", "selected"})
+
 
 if __name__ == "__main__":
     unittest.main()

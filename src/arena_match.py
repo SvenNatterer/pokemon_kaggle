@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from datetime import datetime, timezone
 from typing import Any
 
 from src.arena_core import (
@@ -22,6 +23,7 @@ from src.arena_core import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+REPLAY_INTERVAL = 10
 
 
 def parse_result(stdout: str) -> tuple[int, int, int, str, dict[str, Any]]:
@@ -50,6 +52,28 @@ def _k_factor(games: int) -> int:
     if games < 150:
         return 24
     return 16
+
+
+def schedule_replay(first: Participant, second: Participant, match_id: str) -> str:
+    """Start a separate replay process and return its future JSON reference."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    relative_path = Path("replays") / "arena" / f"{timestamp}_{match_id}.json"
+    log_path = ROOT / "arena_data" / f"replay_{match_id}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("a", encoding="utf-8") as log_handle:
+        subprocess.Popen(
+            [
+                sys.executable, "src/generate_replay.py",
+                "--model-a", first.model_path or "rule_based", "--deck-a", first.deck_path,
+                "--model-b", second.model_path or "rule_based", "--deck-b", second.deck_path,
+                "--out", relative_path.as_posix(),
+            ],
+            cwd=ROOT,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    return relative_path.as_posix()
 
 
 def execute_match(store: ArenaStore, games: int = 4, timeout: int = 300) -> dict[str, Any]:
@@ -104,6 +128,8 @@ def execute_match(store: ArenaStore, games: int = 4, timeout: int = 300) -> dict
         # Symmetric batch update keeps total rating mass stable.
         record["elo_a_after"] = record["elo_a_before"] + delta_a
         record["elo_b_after"] = record["elo_b_before"] - delta_a
+        if (len(matches) + 1) % REPLAY_INTERVAL == 0:
+            record["replay_ref"] = schedule_replay(first, second, record["match_id"])
     store.append_match(record)
     board = rank_participants(participants, store.matches(), load_holdout_results())
     store.save_leaderboard(board)
@@ -116,6 +142,8 @@ def execute_match(store: ArenaStore, games: int = 4, timeout: int = 300) -> dict
 def load_holdout_results() -> dict[str, dict[str, Any]]:
     from src.arena_core import read_json
 
+    # Load legacy/current single-result files first, then replay the append-only
+    # history so every bot keeps its latest completed holdout result.
     candidates = [ROOT / "decks" / "submission_results.json", ROOT / "decks" / "deck18_holdout_results.json"]
     rows: dict[str, dict[str, Any]] = {}
     for path in candidates:
@@ -124,4 +152,13 @@ def load_holdout_results() -> dict[str, dict[str, Any]]:
             candidate = str(row.get("candidate", ""))
             if candidate:
                 rows[candidate] = row
+    history = read_json(ROOT / "arena_data" / "evaluations.json", [])
+    if isinstance(history, list):
+        for evaluation in history:
+            if evaluation.get("state") != "completed":
+                continue
+            for row in evaluation.get("results", {}).get("summary", []):
+                candidate = str(row.get("candidate", ""))
+                if candidate:
+                    rows[candidate] = row
     return rows

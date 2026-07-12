@@ -89,6 +89,41 @@ def deck_path_for_id(deck_id: str) -> Path:
     return ROOT / "decks" / f"deck_{deck_id}.csv"
 
 
+def deck_id_for_path(deck_path: str) -> str:
+    """Return the deck-name key for a regular or bank deck path."""
+    stem = Path(deck_path).stem
+    return stem[5:] if stem.startswith("deck_") else stem
+
+
+def deck_name_for_path(deck_path: str) -> str:
+    """Return the archetype name generated from the strongest Pokemon."""
+    deck_id = deck_id_for_path(deck_path)
+    names = read_json(ROOT / "decks" / "deck_names.json", {})
+    name = str(names.get(deck_id) or "").strip()
+    if name == "Hydrapple ex":
+        return "Ogerpon"
+    return name
+
+
+def deck_display_name_for_path(deck_path: str) -> str:
+    """Return a friendly label like `Ogerpon` for UI and logs."""
+    archetype = deck_name_for_path(deck_path) or "Unknown"
+    return archetype
+
+
+def model_display_name_for_path(model_path: str, deck_path: str) -> str:
+    """Return a display label like `V5 Mega Lucario ex` for PPO bots."""
+    parsed = parse_deck_model_path(model_path) or {}
+    prefix = str(parsed.get("prefix") or "").strip()
+    version = "PPO"
+    if prefix.startswith("ppo_v"):
+        version = f"V{prefix.split('_v', 1)[1].split('_', 1)[0]}"
+    elif prefix == "ppo_deck":
+        version = "PPO"
+    archetype = deck_name_for_path(deck_path) or "Unknown"
+    return f"{version} {archetype}"
+
+
 def _model_bot_id(path: Path) -> str:
     relative_parent = path.parent.resolve().relative_to((ROOT / "models").resolve()).as_posix()
     prefix = "" if relative_parent == "." else relative_parent.replace("/", "__") + "__"
@@ -122,6 +157,16 @@ def _validate_archive(path: Path) -> tuple[str, str]:
         return "unloadable", str(exc)
 
 
+def _is_holdout_model_path(model_path: str | Path | None) -> bool:
+    """Return whether a model is reserved solely for frozen holdout evaluation."""
+    if not model_path:
+        return False
+    try:
+        return (ROOT / model_path).resolve().is_relative_to((ROOT / "models" / "holdout").resolve())
+    except (OSError, ValueError):
+        return False
+
+
 def _manifest_participants() -> list[Participant]:
     data = read_json(PARTICIPANT_MANIFEST, {"agents": []})
     participants = []
@@ -132,9 +177,11 @@ def _manifest_participants() -> list[Participant]:
         deck = str(entry.get("deck_path") or entry.get("deck") or "").strip()
         if not bot_id or not deck:
             continue
+        if _is_holdout_model_path(entry.get("model_path")):
+            continue
         participant = Participant(
             bot_id=bot_id,
-            display_name=str(entry.get("display_name") or entry.get("name") or bot_id),
+            display_name="",
             bot_type=str(entry.get("bot_type") or entry.get("agent_type") or "rule_based"),
             model_path=entry.get("model_path"),
             deck_path=deck,
@@ -142,6 +189,10 @@ def _manifest_participants() -> list[Participant]:
             enabled=bool(entry.get("enabled", True)),
             tags=list(entry.get("tags") or ["current"]),
         )
+        if participant.bot_type == "ppo" and participant.model_path:
+            participant.display_name = model_display_name_for_path(str(participant.model_path), participant.deck_path)
+        else:
+            participant.display_name = str(entry.get("display_name") or entry.get("name") or bot_id)
         deck_abs = ROOT / participant.deck_path
         if not deck_abs.is_file():
             participant.load_status = "unloadable"
@@ -180,9 +231,10 @@ def discover_participants() -> list[Participant]:
             if not deck_path.is_file():
                 status, error = "unloadable", f"deck not found: {_relative(deck_path)}"
             version = parsed["prefix"].replace("_deck", "").replace("ppo_", "") or "ppo"
+            display_name = model_display_name_for_path(_relative(model_path), _relative(deck_path))
             participants.append(Participant(
                 bot_id=bot_id,
-                display_name=model_path.stem.replace("_", " ").title(),
+                display_name=display_name,
                 bot_type="ppo",
                 model_path=_relative(model_path),
                 deck_path=_relative(deck_path),

@@ -6,6 +6,7 @@ import numpy as np
 
 from src.cg.api import AreaType, CardType, OptionType, all_attack, all_card_data
 from src.agents.rule_based_agent import RuleBasedPokemonAgent
+from src.env_wrapper import OPTION_FEATURE_DIM
 
 
 def _first_card(card_type: CardType, predicate=None) -> int:
@@ -44,7 +45,7 @@ def _make_obs() -> dict[str, Any]:
         "option_attack_ids": np.zeros(65, dtype=np.int32),
         "option_types": np.zeros(65, dtype=np.int32),
         "option_areas": np.zeros(65, dtype=np.int32),
-        "option_features": np.zeros((65, 8), dtype=np.float32),
+        "option_features": np.zeros((65, OPTION_FEATURE_DIM), dtype=np.float32),
     }
     obs["vector"][10] = 6
     obs["vector"][20] = 6

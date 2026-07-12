@@ -1,5 +1,7 @@
 const API_BASE = window.location.port === '8080' ? 'http://127.0.0.1:8050' : window.location.origin;
 let busy = false;
+const replayBotIds = new Set();
+const unsavedDeckNames = new Map();
 
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -28,7 +30,7 @@ function renderLeaderboard(rows) {
     $('leaderboard-body').innerHTML = rows.map(row => `
         <tr>
             <td>#${row.rank}</td>
-            <td><strong>${escapeHtml(row.display_name)}</strong><br><small>${escapeHtml(row.bot_id)}</small></td>
+            <td>${row.is_champion ? '<strong title="Validation champion">👑 Champion</strong><br>' : ''}${renderDeckNameField(row)}<br><small>${escapeHtml(row.bot_id)}</small></td>
             <td>${escapeHtml(row.bot_type)}</td>
             <td title="Wilson 35%, normalized Elo 25%, arena rate 15%, holdout 25%"><strong>${(row.ranking_score * 100).toFixed(1)}</strong></td>
             <td>${Math.round(row.elo)} <small>(${row.normalized_elo.toFixed(2)})</small></td>
@@ -37,10 +39,26 @@ function renderLeaderboard(rows) {
             <td style="white-space:nowrap">${row.wins} / ${row.losses} / ${row.draws}</td>
             <td>${row.holdout_missing ? '<span title="Conservative replacement 0.35">missing ⚠</span>' : `${percent(row.holdout_winrate)}<br><small>Wilson ${percent(row.holdout_wilson)}</small>`}</td>
             <td>${row.matches}<br><small>holdout ${row.holdout_games}</small></td>
-        </tr>`).join('') || '<tr><td colspan="9">No participants found.</td></tr>';
+            <td><label class="replay-eye" title="Replay für ${escapeHtml(row.display_name)} erzeugen"><input class="replay-bot-toggle" type="checkbox" value="${escapeHtml(row.bot_id)}" ${replayBotIds.has(row.bot_id) ? 'checked' : ''}><span aria-hidden="true">👁️</span><span class="sr-only">Replay für ${escapeHtml(row.display_name)}</span></label></td>
+        </tr>`).join('') || '<tr><td colspan="11">No participants found.</td></tr>';
+    updateReplayButton();
 }
 
-function renderEvaluation(evaluation) {
+function renderDeckNameField(row) {
+    const modelName = String(row.display_name || '');
+    const match = modelName.match(/^(V\d+|PPO)\s+(.+)$/);
+    const prefix = match ? `${match[1]} ` : '';
+    const deckName = unsavedDeckNames.get(row.deck_path) || (match ? match[2] : modelName);
+    return `<label class="deck-name-field"><span>${escapeHtml(prefix)}</span><input class="deck-name-input" type="text" value="${escapeHtml(deckName)}" data-deck-path="${escapeHtml(row.deck_path)}" aria-label="Deckname für ${escapeHtml(row.bot_id)}" maxlength="80"></label>`;
+}
+
+function updateReplayButton() {
+    const button = $('replay-generate');
+    button.disabled = busy || replayBotIds.size === 0;
+    button.textContent = replayBotIds.size ? `Replays erzeugen (${replayBotIds.size})` : 'Replays erzeugen';
+}
+
+function renderEvaluation(evaluation, champion) {
     const state = evaluation.state || 'idle';
     $('evaluation-progress').value = Number(evaluation.progress || 0);
     $('evaluation-status').textContent = state === 'idle'
@@ -49,6 +67,10 @@ function renderEvaluation(evaluation) {
           `${evaluation.wins || 0} wins, ${evaluation.losses || 0} losses, ${evaluation.draws || 0} draws` +
           (evaluation.error ? ` — ${evaluation.error}` : '');
     $('btn-evaluate').disabled = busy || state === 'running';
+    $('btn-promote').disabled = busy || state === 'running' || state !== 'completed' || !evaluation.selection_file;
+    $('champion-status').textContent = champion && champion.candidate
+        ? `Current champion: ${champion.candidate} (Wilson ${percent(champion.summary?.wilson95_score_lb)})`
+        : 'No champion selected. Run validation, then promote its winner.';
 }
 
 function renderStatus(data) {
@@ -61,17 +83,21 @@ function renderStatus(data) {
     $('btn-pause').disabled = busy || state !== 'running';
     $('btn-stop').disabled = busy || state === 'stopped';
     renderLeaderboard(data.leaderboard || []);
-    renderEvaluation(data.evaluation || {});
+    renderEvaluation(data.evaluation || {}, data.champion || {});
 
     const ppoBots = (data.participants || []).filter(p => p.enabled && p.load_status === 'loadable' && p.bot_type === 'ppo');
-    const selected = $('evaluation-bot').value;
+    const selected = [...$('evaluation-bot').selectedOptions].map(option => option.value);
     $('evaluation-bot').innerHTML = ppoBots.map(p => `<option value="${escapeHtml(p.bot_id)}">${escapeHtml(p.display_name)}</option>`).join('');
-    if (ppoBots.some(p => p.bot_id === selected)) $('evaluation-bot').value = selected;
+    for (const id of selected) {
+        const option = [...$('evaluation-bot').options].find(item => item.value === id);
+        if (option) option.selected = true;
+    }
 
     const failures = data.errors || [];
     const loadable = (data.participants || []).length - failures.length;
     $('bot-diagnostics').innerHTML = `<strong>${loadable} loadable / ${(data.participants || []).length} total</strong>` +
         (failures.length ? `<ul>${failures.map(p => `<li><code>${escapeHtml(p.bot_id)}</code>: ${escapeHtml(p.load_error)}</li>`).join('')}</ul>` : '<p>No load errors.</p>');
+
 }
 
 async function refreshAll() {
@@ -141,12 +167,48 @@ $('btn-pause').addEventListener('click', () => action('/api/pause'));
 $('btn-stop').addEventListener('click', () => action('/api/stop'));
 $('btn-refresh').addEventListener('click', refreshAll);
 $('replay-refresh').addEventListener('click', loadReplays);
+$('leaderboard-body').addEventListener('change', event => {
+    const toggle = event.target.closest('.replay-bot-toggle');
+    if (!toggle) return;
+    if (toggle.checked) replayBotIds.add(toggle.value);
+    else replayBotIds.delete(toggle.value);
+    updateReplayButton();
+});
+$('leaderboard-body').addEventListener('input', event => {
+    const input = event.target.closest('.deck-name-input');
+    if (input) unsavedDeckNames.set(input.dataset.deckPath, input.value);
+});
+$('leaderboard-body').addEventListener('keydown', event => {
+    const input = event.target.closest('.deck-name-input');
+    if (input && event.key === 'Enter') { event.preventDefault(); input.blur(); }
+});
+$('leaderboard-body').addEventListener('blur', async event => {
+    const input = event.target.closest('.deck-name-input');
+    if (!input || !input.value.trim()) return;
+    const deckPath = input.dataset.deckPath;
+    try {
+        const result = await api('/api/deck-names', {method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({deck_path: deckPath, name: input.value.trim()})});
+        unsavedDeckNames.delete(deckPath);
+        showMessage(result.message);
+        await refreshAll();
+    } catch (error) { showMessage(error.message, true); }
+}, true);
+$('replay-generate').addEventListener('click', () => {
+    if (replayBotIds.size) action('/api/replays/generate', {bot_ids: [...replayBotIds]});
+});
 $('btn-reset').addEventListener('click', () => {
     const confirmation = prompt("Type RESET ARENA to delete arena matches/ranking. Models, decks and evaluation results are preserved.");
     if (confirmation === 'RESET ARENA') action('/api/reset', {confirmation, include_replays: false});
 });
-$('btn-evaluate').addEventListener('click', () => action('/api/evaluation/start', {
-    bot_id: $('evaluation-bot').value, games: Number($('evaluation-games').value || 30)
+$('btn-evaluate').addEventListener('click', () => {
+    const bot_ids = [...$('evaluation-bot').selectedOptions].map(option => option.value);
+    if (!bot_ids.length) return showMessage('Select at least one PPO candidate.', true);
+    action('/api/evaluation/start', {
+        bot_ids, mode: $('evaluation-mode').value, games: Number($('evaluation-games').value || 30)
+    });
+});
+$('btn-promote').addEventListener('click', () => action('/api/champion/promote', {
+    min_wilson_improvement: 0.01, max_perspective_gap: 0.10
 }));
 
 refreshAll();

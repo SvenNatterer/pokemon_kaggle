@@ -16,6 +16,7 @@ from src.arena_core import (
     select_matchup,
     wilson_lower_bound,
 )
+from src.arena_match import load_holdout_results
 
 
 def participant(bot_id: str, status: str = "loadable") -> Participant:
@@ -113,6 +114,31 @@ class ParticipantDiscoveryTests(unittest.TestCase):
 
 
 class PersistenceTests(unittest.TestCase):
+    def test_holdout_history_preserves_latest_result_for_each_bot(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "decks").mkdir()
+            (root / "arena_data").mkdir()
+            (root / "decks" / "submission_results.json").write_text(json.dumps({
+                "summary": [{"candidate": "bot_a", "score_rate": 0.1}],
+            }), encoding="utf-8")
+            (root / "arena_data" / "evaluations.json").write_text(json.dumps([
+                {"state": "completed", "results": {"summary": [
+                    {"candidate": "bot_a", "score_rate": 0.6},
+                ]}},
+                {"state": "completed", "results": {"summary": [
+                    {"candidate": "bot_b", "score_rate": 0.7},
+                ]}},
+                {"state": "completed", "results": {"summary": [
+                    {"candidate": "bot_a", "score_rate": 0.8},
+                ]}},
+            ]), encoding="utf-8")
+            with mock.patch("src.arena_match.ROOT", root):
+                results = load_holdout_results()
+
+        self.assertEqual(results["bot_a"]["score_rate"], 0.8)
+        self.assertEqual(results["bot_b"]["score_rate"], 0.7)
+
     def test_reset_only_resets_arena_store(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -127,4 +153,3 @@ class PersistenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

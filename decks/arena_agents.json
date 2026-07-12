@@ -2,7 +2,7 @@
     "agents": [
         {
             "id": "rule_bot_riolu",
-            "name": "Rule Bot (Riolu)",
+            "name": "Rule Bot · Mega Lucario ex",
             "agent_type": "rule_based",
             "deck_path": "decks/deck_bank/bank_18.csv",
             "version": "rule-v1",
@@ -11,7 +11,7 @@
         },
         {
             "id": "foundation__ppo_v4_transfer_source_deck_4_endless_2_ckpt2",
-            "name": "Foundation Deck 4 (Legacy ckpt2)",
+            "name": "Foundation · Mega Kangaskhan ex (Legacy ckpt2)",
             "agent_type": "ppo",
             "model_path": "models/foundation/ppo_v4_transfer_source_deck_4_endless_2_ckpt2.zip",
             "deck_path": "decks/deck_4.csv",
