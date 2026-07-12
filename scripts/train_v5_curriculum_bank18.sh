@@ -13,27 +13,29 @@ export PYTHONPATH="src:${PYTHONPATH:-}"
 export PYTHONUNBUFFERED=1
 
 DECK="${DECK:-decks/deck_bank/bank_18.csv}"
-MODEL="${MODEL:-models/ppo_v5_deck_bank_18.zip}"
+MODEL="${MODEL:-models/ppo_v5b_deck_bank_18.zip}"
 HOLDOUT_FILE="${HOLDOUT_FILE:-decks/holdout_opponents.json}"
+VALIDATION_FILE="${VALIDATION_FILE:-decks/validation_opponents.json}"
 LEAGUE_POOL="${LEAGUE_POOL:-decks/v5_curriculum_bank18_pool.json}"
 SNAPSHOT_DIR="${SNAPSHOT_DIR:-models/frozen_opponents}"
+STAGE_SNAPSHOT_DIR="${STAGE_SNAPSHOT_DIR:-models/stage_snapshots}"
 
 NUM_ENVS="${NUM_ENVS:-8}"
 N_STEPS="${N_STEPS:-2048}"
 BATCH_SIZE="${BATCH_SIZE:-1024}"
-N_EPOCHS="${N_EPOCHS:-4}"
+N_EPOCHS="${N_EPOCHS:-1}"
 BELIEF_DIM="${BELIEF_DIM:-64}"
 AUX_COEF="${AUX_COEF:-0.10}"
 
-STAGE1_STEPS="${STAGE1_STEPS:-500000}"
-STAGE2_STEPS="${STAGE2_STEPS:-500000}"
-STAGE3_STEPS="${STAGE3_STEPS:-1000000}"
-STAGE4_STEPS="${STAGE4_STEPS:-400000}"
-STAGE5_STEPS="${STAGE5_STEPS:-400000}"
-STAGE6_STEPS="${STAGE6_STEPS:-400000}"
-STAGE7_STEPS="${STAGE7_STEPS:-1500000}"
-STAGE8_STEPS="${STAGE8_STEPS:-600000}"
-STAGE9_STEPS="${STAGE9_STEPS:-900000}"
+STAGE1_STEPS="${STAGE1_STEPS:-250000}"
+STAGE2_STEPS="${STAGE2_STEPS:-350000}"
+STAGE3_STEPS="${STAGE3_STEPS:-650000}"
+STAGE4_STEPS="${STAGE4_STEPS:-250000}"
+STAGE5_STEPS="${STAGE5_STEPS:-250000}"
+STAGE6_STEPS="${STAGE6_STEPS:-250000}"
+STAGE7_STEPS="${STAGE7_STEPS:-1200000}"
+STAGE8_STEPS="${STAGE8_STEPS:-350000}"
+STAGE9_STEPS="${STAGE9_STEPS:-550000}"
 
 START_STAGE="${START_STAGE:-1}"
 END_STAGE="${END_STAGE:-9}"
@@ -46,11 +48,11 @@ SKIP_HOLDOUT_CHECK="${SKIP_HOLDOUT_CHECK:-0}"
 
 DRY_RUN=0
 
-WEAK_47_MODEL="models/backup/ppo_v4_deck_bank_47_checkpoint_1.zip"
+WEAK_47_MODEL="backup/backup/ppo_v4_deck_bank_47_checkpoint_1.zip"
 STRONG_47_MODEL="models/ppo_v4_deck_bank_47.zip"
-MODEL_19="models/backup/ppo_v4_deck_bank_19.zip"
-MODEL_37="models/backup/ppo_v4_deck_bank_37_opp_stage2.zip"
-MODEL_79="models/backup/ppo_v4_deck_bank_79.zip"
+MODEL_19="backup/backup/ppo_v4_deck_bank_19.zip"
+MODEL_37="backup/backup/ppo_v4_deck_bank_37_opp_stage2.zip"
+MODEL_79="backup/backup/ppo_v4_deck_bank_79.zip"
 
 usage() {
   cat <<'EOF'
@@ -205,16 +207,33 @@ check_safe() {
     return 0
   fi
 
-  local cmd=(
-    python scripts/check_holdout_safe.py
-    --holdout-file "$HOLDOUT_FILE"
-    --deck "$deck"
-  )
+  local reserved_file
+  for reserved_file in "$HOLDOUT_FILE" "$VALIDATION_FILE"; do
+    [ -f "$reserved_file" ] || continue
+    local cmd=(
+      python scripts/check_holdout_safe.py
+      --holdout-file "$reserved_file"
+      --deck "$deck"
+    )
+    [ -n "$model" ] && cmd+=(--model "$model")
+    [ -n "$pool" ] && cmd+=(--pool "$pool")
+    "${cmd[@]}"
+  done
+}
 
-  [ -n "$model" ] && cmd+=(--model "$model")
-  [ -n "$pool" ] && cmd+=(--pool "$pool")
-
-  "${cmd[@]}"
+save_stage_snapshot() {
+  local stage="$1"
+  local label="$2"
+  local destination="${STAGE_SNAPSHOT_DIR}/${MODEL_STEM}_stage${stage}_${label}.zip"
+  [ "$DRY_RUN" = "0" ] || return 0
+  require_file "$MODEL_ZIP" "stage model"
+  mkdir -p "$STAGE_SNAPSHOT_DIR"
+  if [ -f "$destination" ]; then
+    echo "Keeping existing immutable stage snapshot: ${destination}"
+    return 0
+  fi
+  cp "$MODEL_ZIP" "$destination"
+  echo "Saved immutable stage snapshot: ${destination}"
 }
 
 check_not_already_training() {
@@ -316,6 +335,7 @@ run_stage() {
 
   if [ "$DRY_RUN" = "0" ]; then
     "${cmd[@]}"
+    save_stage_snapshot "$stage" "$label"
   fi
 }
 
@@ -360,6 +380,7 @@ if [ "$SKIP_HOLDOUT_CHECK" = "1" ]; then
 else
   echo "Holdout safety: enabled"
   echo "Holdout manifest: ${HOLDOUT_FILE}"
+  [ ! -f "$VALIDATION_FILE" ] || echo "Validation manifest protected: ${VALIDATION_FILE}"
 fi
 
 echo "Holdout evaluation during training: disabled"

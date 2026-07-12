@@ -36,12 +36,12 @@
             <section class="card leaderboard-card">
                 <h2>🏆 Global Leaderboard</h2>
                 <div class="table-container">
-                    <table id="leaderboard-table" style="min-width: 1200px;">
+                    <table id="leaderboard-table">
                         <thead>
                             <tr>
                                 <th>Rank</th>
                                 <th>Bot</th><th>Type</th><th>Score</th><th>Elo</th><th>Arena</th>
-                                <th>Wilson</th><th>W / L / D</th><th>Holdout</th><th>Games</th>
+                                <th>Wilson</th><th>W / L / D</th><th>Games</th><th title="Replay für diesen Bot erzeugen">Replay</th>
                             </tr>
                         </thead>
                         <tbody id="leaderboard-body">
@@ -51,14 +51,22 @@
                 </div>
             </section>
             <section class="card">
-                <div class="section-head"><div><h2>🧪 Holdout Evaluation</h2><p class="subtitle">Separate from arena matches and training.</p></div></div>
-                <div class="control-panel">
-                    <select id="evaluation-bot"></select>
-                    <input id="evaluation-games" type="number" min="1" value="30" aria-label="Games per holdout opponent">
-                    <button id="btn-evaluate" class="btn btn-primary">Start evaluation</button>
+                <div class="section-head"><div><h2>🧪 Evaluation & Champion</h2><p class="subtitle">1) candidates select  2) validation run  3) champion promote  4) final holdout only at the end.</p></div></div>
+                <div class="evaluation-controls">
+                    <label class="evaluation-field evaluation-candidates"><span>Kandidaten</span><select id="evaluation-bot" multiple size="6" aria-label="Evaluation candidates"></select></label>
+                    <label class="evaluation-field"><span>Pool</span><select id="evaluation-mode" aria-label="Evaluation mode"><option value="validation">Validation (recommended)</option><option value="final">Final holdout</option></select></label>
+                    <label class="evaluation-field"><span>Spiele je Gegner</span><input id="evaluation-games" type="number" min="1" value="30" aria-label="Games per opponent"></label>
+                    <div class="evaluation-actions"><button id="btn-evaluate" class="btn btn-primary">1. Evaluate</button><button id="btn-promote" class="btn btn-secondary">2. Promote champion</button></div>
                 </div>
+                <p class="subtitle">Für Vergleiche mehrere Modelle mit Cmd/Ctrl auswählen. Nutze 100 Spiele pro Gegner für Entscheidungen.</p>
                 <div id="evaluation-status" class="muted-line">No evaluation running.</div>
+                <div id="champion-status" class="muted-line">No champion selected.</div>
                 <progress id="evaluation-progress" max="1" value="0" style="width:100%"></progress>
+                <div id="evaluation-results" class="evaluation-results"><span class="muted-line">Noch keine Validation-Ergebnisse.</span></div>
+                <section class="holdout-panel" aria-labelledby="holdout-heading">
+                    <div><h3 id="holdout-heading">🔒 Final Holdout</h3><p>Nur einmal für die endgültige Modellauswahl verwenden.</p></div>
+                    <div id="holdout-results" class="holdout-results">Noch keine Holdout-Ergebnisse.</div>
+                </section>
             </section>
 
             <section class="card">
@@ -77,6 +85,7 @@
                         <!-- HERoz launcher removed -->
                     </div>
                 </div>
+                <p class="subtitle">Ein aktiviertes Auge erzeugt automatisch bei jedem 15. Arena-Match dieses Bots ein Replay. Ohne Auswahl werden keine neuen Arena-Replays erzeugt.</p>
                 <div id="replay-status" class="muted-line">Loading replays...</div>
                 <div id="replay-list" class="replay-list"></div>
             </section>

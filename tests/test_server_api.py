@@ -33,6 +33,19 @@ class ServerApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["state"], "paused")
 
+    def test_evaluation_payload_includes_results_and_selected_winner(self):
+        state = {
+            "state": "completed",
+            "result_file": "arena_data/evaluation_results/run.json",
+            "selection_file": "arena_data/evaluation_results/run_selection.json",
+        }
+        with mock.patch.object(server, "read_json", side_effect=[
+            state, {"summary": [{"candidate": "a"}]}, {"candidate": "a"}
+        ]):
+            payload = server.evaluation_payload()
+        self.assertEqual(payload["results"], [{"candidate": "a"}])
+        self.assertEqual(payload["selection"], {"candidate": "a"})
+
     def test_factory_reset_requires_exact_confirmation(self):
         response = self.client.post("/api/reset", json={"confirmation": "yes"})
         self.assertEqual(response.status_code, 400)
@@ -68,6 +81,74 @@ class ServerApiTests(unittest.TestCase):
         server.evaluation_process = FakeProcess()
         response = self.client.post("/api/evaluation/start", json={"bot_id": "anything"})
         self.assertEqual(response.status_code, 409)
+
+    def test_champion_promotion_requires_completed_dashboard_evaluation(self):
+        with mock.patch.object(server, "read_json", return_value={"state": "idle"}):
+            response = self.client.post("/api/champion/promote", json={})
+        self.assertEqual(response.status_code, 400)
+
+    def test_champion_promotion_runs_script_as_module(self):
+        evaluation = {"state": "completed", "selection_file": "arena_data/selection.json"}
+        completed = mock.Mock(returncode=0, stdout="Promoted champion", stderr="")
+        with mock.patch.object(server, "read_json", side_effect=[evaluation, {}]), mock.patch.object(
+            server.subprocess, "run", return_value=completed
+        ) as run:
+            response = self.client.post("/api/champion/promote", json={})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(run.call_args.args[0][:3], [server.sys.executable, "-m", "scripts.promote_champion"])
+
+    def test_watched_bots_are_deduplicated_and_saved_atomically(self):
+        with mock.patch.object(server, "atomic_write_json") as write:
+            response = self.client.post("/api/watched", json={"watched": ["b", "a", "b", ""]})
+        self.assertEqual(response.status_code, 200)
+        write.assert_called_once_with(server.WATCHED_FILE, {"watched": ["a", "b"]})
+
+    def test_bot_names_are_saved_per_checkpoint(self):
+        participant = Participant("checkpoint-a", "Old", "ppo", "deck.csv", "model.zip")
+        with mock.patch.object(server, "discover_participants", return_value=[participant]), mock.patch.object(
+            server, "read_json", return_value={}
+        ), mock.patch.object(server, "atomic_write_json") as write:
+            response = self.client.post("/api/bot-names", json={"bot_id": "checkpoint-a", "name": "My checkpoint"})
+        self.assertEqual(response.status_code, 200)
+        write.assert_called_once_with(server.BOT_NAMES_FILE, {"checkpoint-a": "My checkpoint"})
+
+    def test_bot_name_rejects_unknown_checkpoint(self):
+        with mock.patch.object(server, "discover_participants", return_value=[]):
+            response = self.client.post("/api/bot-names", json={"bot_id": "missing", "name": "Name"})
+        self.assertEqual(response.status_code, 400)
+
+    def test_replay_generation_requires_a_selected_bot(self):
+        with mock.patch.object(server, "schedule_replay") as schedule:
+            response = self.client.post("/api/replays/generate", json={"bot_ids": []})
+        self.assertEqual(response.status_code, 400)
+        schedule.assert_not_called()
+
+    def test_replay_generation_uses_selected_bot_against_top_other_bot(self):
+        top = Participant("top", "Top", "ppo", "decks/deck_1.csv", "models/ppo_deck_1.zip", load_status="loadable")
+        other = Participant("other", "Other", "ppo", "decks/deck_2.csv", "models/ppo_deck_2.zip", load_status="loadable")
+        with mock.patch.object(server, "discover_participants", return_value=[other, top]), mock.patch.object(
+            server.arena_store, "matches", return_value=[]
+        ), mock.patch.object(server, "load_holdout_results", return_value={}), mock.patch.object(
+            server, "schedule_replay", return_value="replays/arena/test.json"
+        ) as schedule:
+            response = self.client.post("/api/replays/generate", json={"bot_ids": ["other"]})
+        self.assertEqual(response.status_code, 200)
+        schedule.assert_called_once()
+        self.assertEqual(schedule.call_args.args[0].bot_id, "other")
+        self.assertEqual(schedule.call_args.args[1].bot_id, "top")
+
+    def test_replay_generation_creates_one_replay_for_each_selected_bot(self):
+        top = Participant("top", "Top", "ppo", "decks/deck_1.csv", "models/ppo_deck_1.zip", load_status="loadable")
+        selected = Participant("selected", "Selected", "ppo", "decks/deck_2.csv", "models/ppo_deck_2.zip", load_status="loadable")
+        with mock.patch.object(server, "discover_participants", return_value=[selected, top]), mock.patch.object(
+            server.arena_store, "matches", return_value=[]
+        ), mock.patch.object(server, "load_holdout_results", return_value={}), mock.patch.object(
+            server, "schedule_replay", return_value="replays/arena/test.json"
+        ) as schedule:
+            response = self.client.post("/api/replays/generate", json={"bot_ids": ["top", "selected"]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(schedule.call_count, 2)
+        self.assertEqual({call.args[0].bot_id for call in schedule.call_args_list}, {"top", "selected"})
 
 
 if __name__ == "__main__":

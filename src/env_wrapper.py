@@ -5,7 +5,7 @@ import os
 
 from src.cg.game import battle_start, battle_select, battle_finish
 from src.cg.api import AreaType, OptionType, SelectContext, to_observation_class, Observation, all_card_data, all_attack, CardType, LogType
-from src.agents.rule_based_agent import RuleBasedPokemonAgent, is_rule_based_model_spec
+from src.agents.rule_based_agent import RuleBasedPokemonAgent, is_rule_based_model_spec, rule_based_profile_from_spec
 from src.model_paths import strip_zip_suffix
 
 RESULT_REASON_PRIZE = 1
@@ -24,7 +24,18 @@ DISCARD_CARD_SLOTS = 30
 REVEALED_CARD_SLOTS = 120
 CONTEXT_CARD_SLOTS = 2
 LOG_CARD_SLOTS = 10
-OPTION_FEATURE_DIM = 8
+OPTION_FEATURE_DIM = 21
+PRIZE_CARD_SLOTS = 6
+DECK_LIST_SLOTS = 60
+SEARCH_CARD_SLOTS = 60
+LOOKING_CARD_SLOTS = 60
+MAX_HIDDEN_CARD_COUNT = 60
+
+
+def encode_hidden_card_count(count):
+    """Map an absolute hidden-card count to [0, 1] without losing duplicates."""
+    clipped = min(MAX_HIDDEN_CARD_COUNT, max(0, int(count)))
+    return np.float32(np.log1p(clipped) / np.log1p(MAX_HIDDEN_CARD_COUNT))
 
 DEFAULT_REWARD_CONFIG = {
     "STEP_PENALTY": 0.0,
@@ -280,8 +291,20 @@ class PokemonTCGEnv(gym.Env):
             "revealed_ids": spaces.Box(
                 low=0, high=MAX_CARD_ID, shape=(REVEALED_CARD_SLOTS,), dtype=np.int32
             ),
+            "prize_ids": spaces.Box(
+                low=0, high=MAX_CARD_ID, shape=(2, PRIZE_CARD_SLOTS), dtype=np.int32
+            ),
+            "search_ids": spaces.Box(
+                low=0, high=MAX_CARD_ID, shape=(SEARCH_CARD_SLOTS,), dtype=np.int32
+            ),
+            "looking_ids": spaces.Box(
+                low=0, high=MAX_CARD_ID, shape=(LOOKING_CARD_SLOTS,), dtype=np.int32
+            ),
+            "own_deck_ids": spaces.Box(
+                low=0, high=MAX_CARD_ID, shape=(DECK_LIST_SLOTS,), dtype=np.int32
+            ),
             "context_card_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(CONTEXT_CARD_SLOTS,), dtype=np.int32
+                low=0, high=MAX_CARD_ID, shape=(CONTEXT_CARD_SLOTS + 1,), dtype=np.int32
             ),
             "log_card_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(LOG_CARD_SLOTS,), dtype=np.int32),
             "option_card_ids": spaces.Box(
@@ -375,7 +398,9 @@ class PokemonTCGEnv(gym.Env):
                 self.opponent_model = cached_model
         if self.opponent_model_path is not None and self.opponent_model is None:
             if is_rule_based_model_spec(self.opponent_model_path):
-                self.opponent_model = RuleBasedPokemonAgent()
+                self.opponent_model = RuleBasedPokemonAgent(
+                    profile=rule_based_profile_from_spec(self.opponent_model_path)
+                )
             else:
                 self.opponent_model_path = strip_zip_suffix(self.opponent_model_path)
                 # We import here to avoid circular imports if necessary
@@ -766,6 +791,64 @@ class PokemonTCGEnv(gym.Env):
             return _bounded_id(active[0], MAX_CARD_ID) if active else 0
         return 0
 
+    def _immediate_option_features(self, obs, option, card_id, attack_id, perspective, options):
+        """Factual option consequences and resource availability, never utility."""
+        if obs.current is None:
+            return [0.0] * 13
+        our_player = obs.current.players[perspective]
+        option_type = _enum_value(getattr(option, "type", None), OptionType)
+        same_type_count = sum(
+            _enum_value(getattr(candidate, "type", None), OptionType) == option_type
+            for candidate in options
+        )
+        same_card_count = sum(
+            self._resolve_option_card_id(obs, candidate, perspective) == card_id
+            for candidate in options
+        ) if card_id else 0
+        bench_space = max(0, int(getattr(our_player, "benchMax", 5)) - len(getattr(our_player, "bench", None) or []))
+        common = [
+            min(1.0, len(options) / MAX_ENCODED_OPTIONS),
+            min(1.0, same_type_count / MAX_ENCODED_OPTIONS),
+            min(1.0, same_card_count / 4.0),
+            min(1.0, len(getattr(our_player, "hand", None) or []) / 24.0),
+            min(1.0, int(getattr(our_player, "deckCount", 0) or 0) / 60.0),
+            min(1.0, bench_space / 5.0),
+            float(option_type == int(OptionType.ABILITY)),
+        ]
+        if not attack_id:
+            return [0.0] * 6 + common
+        attack = self.attack_data_by_id.get(attack_id)
+        opponents = list(getattr(obs.current.players[1 - perspective], "active", None) or [])
+        target = opponents[0] if opponents else None
+        if attack is None or target is None:
+            return [0.0] * 6 + common
+
+        printed_damage = max(0, int(getattr(attack, "damage", 0) or 0))
+        target_hp = max(0, int(getattr(target, "hp", 0) or 0))
+        target_card = self.card_data_by_id.get(_bounded_id(target, MAX_CARD_ID))
+        attackers = list(getattr(our_player, "active", None) or [])
+        attacker_card = self.card_data_by_id.get(_bounded_id(attackers[0], MAX_CARD_ID)) if attackers else None
+        attacker_type = _energy_value(getattr(attacker_card, "energyType", -1)) if attacker_card else -1
+        weakness = _energy_value(getattr(target_card, "weakness", -1)) if target_card else -1
+        resistance = _energy_value(getattr(target_card, "resistance", -1)) if target_card else -1
+        adjusted_damage = printed_damage
+        if printed_damage and attacker_type == weakness:
+            adjusted_damage *= 2
+        if printed_damage and attacker_type == resistance:
+            adjusted_damage = max(0, adjusted_damage - 30)
+        is_ex = bool(getattr(target_card, "ex", False))
+        is_mega_ex = bool(getattr(target_card, "megaEx", False))
+        prizes = 3 if is_mega_ex else (2 if is_ex else 1)
+        knockout = adjusted_damage > 0 and adjusted_damage >= target_hp
+        return [
+            min(1.0, printed_damage / 400.0),
+            min(1.0, adjusted_damage / 400.0),
+            min(1.0, target_hp / 400.0),
+            float(knockout),
+            (prizes / 3.0) if knockout else 0.0,
+            float(is_ex),
+        ] + common
+
     def _structured_observation(self, obs, perspective, pending_selection):
         entity_ids = np.zeros(ENTITY_SLOTS, dtype=np.int32)
         entity_features = np.zeros((ENTITY_SLOTS, ENTITY_FEATURE_DIM), dtype=np.float32)
@@ -779,7 +862,11 @@ class PokemonTCGEnv(gym.Env):
         hand_ids = np.zeros(HAND_CARD_SLOTS, dtype=np.int32)
         discard_ids = np.zeros((2, DISCARD_CARD_SLOTS), dtype=np.int32)
         revealed_ids = np.zeros(REVEALED_CARD_SLOTS, dtype=np.int32)
-        context_card_ids = np.zeros(CONTEXT_CARD_SLOTS, dtype=np.int32)
+        prize_ids = np.zeros((2, PRIZE_CARD_SLOTS), dtype=np.int32)
+        search_ids = np.zeros(SEARCH_CARD_SLOTS, dtype=np.int32)
+        looking_ids = np.zeros(LOOKING_CARD_SLOTS, dtype=np.int32)
+        own_deck_ids = np.zeros(DECK_LIST_SLOTS, dtype=np.int32)
+        context_card_ids = np.zeros(CONTEXT_CARD_SLOTS + 1, dtype=np.int32)
         log_card_ids = np.zeros(LOG_CARD_SLOTS, dtype=np.int32)
         option_card_ids = np.zeros(MAX_ENCODED_OPTIONS, dtype=np.int32)
         option_attack_ids = np.zeros(MAX_ENCODED_OPTIONS, dtype=np.int32)
@@ -797,6 +884,10 @@ class PokemonTCGEnv(gym.Env):
                 "hand_ids": hand_ids,
                 "discard_ids": discard_ids,
                 "revealed_ids": revealed_ids,
+                "prize_ids": prize_ids,
+                "search_ids": search_ids,
+                "looking_ids": looking_ids,
+                "own_deck_ids": own_deck_ids,
                 "context_card_ids": context_card_ids,
                 "log_card_ids": log_card_ids,
                 "option_card_ids": option_card_ids,
@@ -886,16 +977,26 @@ class PokemonTCGEnv(gym.Env):
             discard = list(getattr(player, "discard", None) or [])[-DISCARD_CARD_SLOTS:]
             for index, card in enumerate(discard):
                 discard_ids[relative_player, index] = _bounded_id(card, MAX_CARD_ID)
+            for index, card in enumerate(list(getattr(player, "prize", None) or [])[:PRIZE_CARD_SLOTS]):
+                prize_ids[relative_player, index] = _bounded_id(card, MAX_CARD_ID)
 
-        revealed = []
-        revealed.extend(list(getattr(obs.select, "deck", None) or []))
-        revealed.extend(list(getattr(obs.current, "looking", None) or []))
+        searched = list(getattr(obs.select, "deck", None) or [])
+        looking = list(getattr(obs.current, "looking", None) or [])
+        revealed = searched + looking
         for index, card in enumerate(revealed[:REVEALED_CARD_SLOTS]):
             revealed_ids[index] = _bounded_id(card, MAX_CARD_ID)
+        for index, card in enumerate(searched[:SEARCH_CARD_SLOTS]):
+            search_ids[index] = _bounded_id(card, MAX_CARD_ID)
+        for index, card in enumerate(looking[:LOOKING_CARD_SLOTS]):
+            looking_ids[index] = _bounded_id(card, MAX_CARD_ID)
+        own_source_deck = self.my_deck if perspective == 0 else self.opponent_deck
+        for index, card_id in enumerate(own_source_deck[:DECK_LIST_SLOTS]):
+            own_deck_ids[index] = _bounded_id(card_id, MAX_CARD_ID)
         context_card_ids[0] = _bounded_id(getattr(obs.select, "contextCard", None), MAX_CARD_ID)
+        context_card_ids[1] = _bounded_id(getattr(obs.select, "effect", None), MAX_CARD_ID)
         stadium = list(getattr(obs.current, "stadium", None) or [])
         if stadium:
-            context_card_ids[1] = _bounded_id(stadium[0], MAX_CARD_ID)
+            context_card_ids[2] = _bounded_id(stadium[0], MAX_CARD_ID)
 
         recent_logs = list(getattr(obs, "logs", None) or [])[-5:]
         for index, log in enumerate(reversed(recent_logs)):
@@ -942,6 +1043,9 @@ class PokemonTCGEnv(gym.Env):
                     float(index in selected_indices),
                     float(card_id > 0),
                     float(attack_id > 0),
+                    *self._immediate_option_features(
+                        obs, option, card_id, attack_id, perspective, options
+                    ),
                 ],
                 dtype=np.float32,
             )
@@ -955,6 +1059,10 @@ class PokemonTCGEnv(gym.Env):
             "hand_ids": hand_ids,
             "discard_ids": discard_ids,
             "revealed_ids": revealed_ids,
+            "prize_ids": prize_ids,
+            "search_ids": search_ids,
+            "looking_ids": looking_ids,
+            "own_deck_ids": own_deck_ids,
             "context_card_ids": context_card_ids,
             "log_card_ids": log_card_ids,
             "option_card_ids": option_card_ids,
@@ -1180,7 +1288,9 @@ class PokemonTCGEnv(gym.Env):
                     vec[base+8] = float(abs(int(option_player) - perspective))
                     vec[base+9] = float(opt.number if opt.number is not None else (opt.count if hasattr(opt, 'count') and opt.count is not None else 0))
                 
-        # Auxiliary Target: Predict the hidden cards of the opponent
+        # Auxiliary target: predict how many copies of each card remain hidden.
+        # Log scaling distinguishes ordinary 1-4 copy cards while still
+        # representing decks with many copies of a basic Energy.
         hidden_deck = self.opponent_deck if perspective == 0 else self.my_deck
         hidden_player_index = 1 - perspective
         hidden_counts = {}
@@ -1210,7 +1320,7 @@ class PokemonTCGEnv(gym.Env):
         aux_target = np.zeros(2000, dtype=np.float32)
         for card_id, count in hidden_counts.items():
             if card_id < 2000 and count > 0:
-                aux_target[card_id] = 1.0
+                aux_target[card_id] = encode_hidden_card_count(count)
                 
         structured = self._structured_observation(obs, perspective, pending_selection)
         return {"vector": vec, "action_mask": mask, "aux_target": aux_target, **structured}
