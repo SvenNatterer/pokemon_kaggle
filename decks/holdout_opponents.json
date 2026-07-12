@@ -45,6 +45,18 @@
       "deck_id": "bank_30",
       "model_path": "models/holdout/ppo_v4_deck_bank_30.zip",
       "deck_path": "decks/deck_bank/bank_30.csv"
+    },
+    {
+      "label": "rule_balanced_deck_bank_10",
+      "deck_id": "bank_10",
+      "model_path": "rule_based:balanced",
+      "deck_path": "decks/deck_bank/bank_10.csv"
+    },
+    {
+      "label": "rule_setup_deck_bank_50",
+      "deck_id": "bank_50",
+      "model_path": "rule_based:setup",
+      "deck_path": "decks/deck_bank/bank_50.csv"
     }
   ]
 }

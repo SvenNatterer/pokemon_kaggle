@@ -16,6 +16,8 @@ if "WANDB_MODE" not in os.environ:
 import wandb
 from wandb.integration.sb3 import WandbCallback
 from src.agents.rule_based_agent import is_rule_based_model_spec
+from src.arena_core import deck_display_name_for_path, model_display_name_for_path
+from src.experiment_registry import git_revision, registry_path, write_experiment
 
 class LiveStatusCallback(BaseCallback):
     def __init__(self, action_text, total_timesteps, status_freq=10000, verbose=0):
@@ -94,7 +96,7 @@ def save_final_model_atomically(model, model_path):
     temporary_zip = f"{temporary_base}.zip"
     save_model = False
     try:
-        model.save(temporary_base)
+        model.save(temporary_zip)
         os.replace(temporary_zip, f"{model_path}.zip")
     finally:
         if os.path.exists(temporary_zip):
@@ -164,18 +166,26 @@ def train():
     parser.add_argument("--batch-size", type=int, default=512, help="Minibatch size")
     parser.add_argument("--n-steps", type=int, default=2048, help="Steps per env per rollout")
     parser.add_argument("--sparse-rewards", action="store_true", help="Disable aggressive reward shaping")
-    parser.add_argument("--aux-coef", type=float, default=0.5, help="Weight for hidden-card auxiliary loss")
+    parser.add_argument("--aux-coef", type=float, default=0.5, help="Weight for hidden-card count auxiliary loss")
     parser.add_argument("--belief-actor", action="store_true", help="Feed the learned hidden-card belief embedding into the actor")
     parser.add_argument("--belief-dim", type=int, default=64, help="Size of the learned belief embedding used by --belief-actor")
     parser.add_argument("--no-belief-detach", dest="belief_detach", action="store_false", help="Allow PPO loss gradients into the belief encoder")
     parser.add_argument("--rotate-perspective", action="store_true", help="Randomly play as Player 0 or Player 1 each episode")
+    parser.add_argument(
+        "--reserved-opponents", action="append", default=[],
+        help="Opponent manifest reserved for validation/final evaluation; training overlap is rejected.",
+    )
     parser.set_defaults(belief_detach=True)
     args = parser.parse_args()
 
     opp_deck_path = args.opp_deck if args.opp_deck else args.deck
     from scripts.check_holdout_safe import check_paths
-    holdout_file = "decks/holdout_opponents.json"
-    if os.path.exists(holdout_file):
+    reserved_files = ["decks/holdout_opponents.json", *args.reserved_opponents]
+    if os.path.exists("decks/validation_opponents.json"):
+        reserved_files.append("decks/validation_opponents.json")
+    for holdout_file in dict.fromkeys(reserved_files):
+        if not os.path.exists(holdout_file):
+            continue
         check_paths(
             holdout_file,
             [opp_deck_path],
@@ -200,6 +210,16 @@ def train():
     ])
     
     model_path = resolve_model_path(args.model_name)
+    experiment_file = registry_path(model_path)
+    experiment = {
+        "schema_version": 1,
+        "status": "running",
+        "model_path": f"{model_path}.zip",
+        "git_revision": git_revision(),
+        "arguments": vars(args),
+        "reserved_opponent_manifests": [path for path in reserved_files if os.path.exists(path)],
+    }
+    write_experiment(experiment_file, experiment)
 
     target_exists = os.path.exists(f"{model_path}.zip")
     if target_exists and not args.continue_existing and not args.overwrite:
@@ -287,18 +307,10 @@ def train():
 
     deck_id = args.deck.split('_')[-1].split('.')[0]
     opp_id = "pool" if opponent_pool else opp_deck_path.split('_')[-1].split('.')[0]
-    
-    deck_name = "Unknown"
-    opp_name = "Unknown"
-    if os.path.exists("decks/deck_names.json"):
-        try:
-            with open("decks/deck_names.json", "r") as f:
-                names = json.load(f)
-                deck_name = names.get(str(deck_id), "Unknown")
-                opp_name = "Opponent League" if opponent_pool else names.get(str(opp_id), "Unknown")
-        except: pass
-        
-    action_text = f"🧠 Training: {deck_name} (D{deck_id}) vs {opp_name} (D{opp_id})"
+    deck_name = model_display_name_for_path(f"{model_path}.zip", args.deck)
+    opp_name = "Opponent League" if opponent_pool else deck_display_name_for_path(opp_deck_path)
+
+    action_text = f"🧠 Training: {deck_name} vs {opp_name}"
     
     run_suffix = "endless" if endless_training else str(args.timesteps)
     run_name = os.environ.get("WANDB_NAME", f"D{deck_id}_vs_D{opp_id}_{run_suffix}")
@@ -313,7 +325,7 @@ def train():
         monitor_gym=True,
         save_code=True,
         dir="/tmp",
-        mode="online",
+        mode=os.environ.get("WANDB_MODE", "online"),
     )
     tb_run_id = getattr(run, "id", None) or str(int(time.time()))
     tb_log_name = os.environ.get("TB_LOG_NAME", f"Deck_{deck_id}_{tb_run_id}")
@@ -334,6 +346,7 @@ def train():
     old_sigterm_handler = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, handle_stop_signal)
 
+    save_model = False
     try:
         if endless_training:
             while True:
@@ -359,6 +372,10 @@ def train():
         if save_model:
             save_final_model_atomically(model, model_path)
             print(f"Model saved to {model_path}.zip")
+            experiment.update({"status": "completed", "num_timesteps": int(model.num_timesteps)})
+        else:
+            experiment["status"] = "failed"
+        write_experiment(experiment_file, experiment)
         try:
             env.close()
         except Exception:

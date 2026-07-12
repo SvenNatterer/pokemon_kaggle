@@ -2,16 +2,47 @@
     "agents": [
         {
             "id": "rule_bot_riolu",
-            "name": "Rule Bot (Riolu)",
+            "name": "Rule Bot · Mega Lucario ex",
             "agent_type": "rule_based",
+            "model_path": "rule_based:setup",
             "deck_path": "decks/deck_bank/bank_18.csv",
-            "version": "rule-v1",
+            "version": "rule-v2-setup",
             "tags": ["current", "rule_based"],
             "enabled": true
         },
         {
+            "id": "rule_bot_aggressive_98",
+            "name": "Rule Bot · Aggressive · Deck 98",
+            "agent_type": "rule_based",
+            "model_path": "rule_based:aggressive",
+            "deck_path": "decks/deck_98.csv",
+            "version": "rule-v2-aggressive",
+            "tags": ["current", "rule_based", "validation"],
+            "enabled": true
+        },
+        {
+            "id": "rule_bot_defensive_16",
+            "name": "Rule Bot · Defensive · Deck 16",
+            "agent_type": "rule_based",
+            "model_path": "rule_based:defensive",
+            "deck_path": "decks/deck_16.csv",
+            "version": "rule-v2-defensive",
+            "tags": ["current", "rule_based", "validation"],
+            "enabled": true
+        },
+        {
+            "id": "rule_bot_balanced_bank10",
+            "name": "Rule Bot · Balanced · Bank 10",
+            "agent_type": "rule_based",
+            "model_path": "rule_based:balanced",
+            "deck_path": "decks/deck_bank/bank_10.csv",
+            "version": "rule-v2-balanced",
+            "tags": ["current", "rule_based", "holdout"],
+            "enabled": true
+        },
+        {
             "id": "foundation__ppo_v4_transfer_source_deck_4_endless_2_ckpt2",
-            "name": "Foundation Deck 4 (Legacy ckpt2)",
+            "name": "Foundation · Mega Kangaskhan ex (Legacy ckpt2)",
             "agent_type": "ppo",
             "model_path": "models/foundation/ppo_v4_transfer_source_deck_4_endless_2_ckpt2.zip",
             "deck_path": "decks/deck_4.csv",

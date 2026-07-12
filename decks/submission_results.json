@@ -1,5 +1,5 @@
 {
-  "created_at": 1783781706,
+  "created_at": 1783782018,
   "games_per_pair": 30,
   "holdout_file": "decks/holdout_opponents.json",
   "matches": [
@@ -9,13 +9,13 @@
       "draws": 0,
       "error": "",
       "games": 30,
-      "losses": 15,
+      "losses": 18,
       "opponent": "ppo_v4_deck_12",
-      "score": 15.0,
-      "score_rate": 0.5,
-      "seconds": 7.983270124997944,
-      "win_rate": 0.5,
-      "wins": 15
+      "score": 12.0,
+      "score_rate": 0.4,
+      "seconds": 6.547567834000802,
+      "win_rate": 0.4,
+      "wins": 12
     },
     {
       "candidate": "ppo_v4_deck_bank_47",
@@ -23,13 +23,13 @@
       "draws": 0,
       "error": "",
       "games": 30,
-      "losses": 16,
+      "losses": 12,
       "opponent": "ppo_v4_deck_4",
-      "score": 14.0,
-      "score_rate": 0.4666666666666667,
-      "seconds": 5.626659332992858,
-      "win_rate": 0.4666666666666667,
-      "wins": 14
+      "score": 18.0,
+      "score_rate": 0.6,
+      "seconds": 5.923652750003384,
+      "win_rate": 0.6,
+      "wins": 18
     },
     {
       "candidate": "ppo_v4_deck_bank_47",
@@ -37,13 +37,13 @@
       "draws": 0,
       "error": "",
       "games": 30,
-      "losses": 9,
+      "losses": 11,
       "opponent": "ppo_v4_deck_7",
-      "score": 21.0,
-      "score_rate": 0.7,
-      "seconds": 6.714449917009915,
-      "win_rate": 0.7,
-      "wins": 21
+      "score": 19.0,
+      "score_rate": 0.6333333333333333,
+      "seconds": 6.569966625000234,
+      "win_rate": 0.6333333333333333,
+      "wins": 19
     },
     {
       "candidate": "ppo_v4_deck_bank_47",
@@ -55,7 +55,7 @@
       "opponent": "ppo_v4_deck_bank_1",
       "score": 13.0,
       "score_rate": 0.43333333333333335,
-      "seconds": 6.7403407499950845,
+      "seconds": 6.154633707992616,
       "win_rate": 0.43333333333333335,
       "wins": 13
     },
@@ -69,7 +69,7 @@
       "opponent": "ppo_v4_deck_bank_16",
       "score": 13.0,
       "score_rate": 0.43333333333333335,
-      "seconds": 7.120430291994126,
+      "seconds": 6.2570307919959305,
       "win_rate": 0.43333333333333335,
       "wins": 13
     },
@@ -79,13 +79,13 @@
       "draws": 0,
       "error": "",
       "games": 30,
-      "losses": 17,
+      "losses": 19,
       "opponent": "ppo_v4_deck_bank_20",
-      "score": 13.0,
-      "score_rate": 0.43333333333333335,
-      "seconds": 7.489365084009478,
-      "win_rate": 0.43333333333333335,
-      "wins": 13
+      "score": 11.0,
+      "score_rate": 0.36666666666666664,
+      "seconds": 6.626519375000498,
+      "win_rate": 0.36666666666666664,
+      "wins": 11
     },
     {
       "candidate": "ppo_v4_deck_bank_47",
@@ -93,13 +93,13 @@
       "draws": 0,
       "error": "",
       "games": 30,
-      "losses": 16,
+      "losses": 12,
       "opponent": "ppo_v4_deck_bank_30",
-      "score": 14.0,
-      "score_rate": 0.4666666666666667,
-      "seconds": 7.006234957996639,
-      "win_rate": 0.4666666666666667,
-      "wins": 14
+      "score": 18.0,
+      "score_rate": 0.6,
+      "seconds": 6.979180875001475,
+      "win_rate": 0.6,
+      "wins": 18
     }
   ],
   "summary": [
@@ -108,13 +108,13 @@
       "crashes": 0,
       "draws": 0,
       "games": 210,
-      "losses": 107,
-      "score_rate": 0.49047619047619045,
-      "wilson95_score_lb": 0.423642994944555,
-      "win_rate": 0.49047619047619045,
-      "wins": 103,
-      "worst_opponent": "ppo_v4_deck_bank_1",
-      "worst_score_rate": 0.43333333333333335
+      "losses": 106,
+      "score_rate": 0.49523809523809526,
+      "wilson95_score_lb": 0.42831039846849644,
+      "win_rate": 0.49523809523809526,
+      "wins": 104,
+      "worst_opponent": "ppo_v4_deck_bank_20",
+      "worst_score_rate": 0.36666666666666664
     }
   ]
 }

@@ -15,6 +15,11 @@ from src.arena_match import execute_match
 
 LOCK_FILE = ARENA_DIR / "worker.lock"
 PID_FILE = ARENA_DIR / "worker.pid"
+TEMPORARY_ROSTER_ERROR = "at least two enabled, loadable participants are required"
+
+
+def is_temporary_roster_error(exc: Exception) -> bool:
+    return isinstance(exc, RuntimeError) and str(exc) == TEMPORARY_ROSTER_ERROR
 
 
 def run_worker(games: int = 4, timeout: int = 300, poll_seconds: float = 0.5) -> int:
@@ -45,7 +50,12 @@ def run_worker(games: int = 4, timeout: int = 300, poll_seconds: float = 0.5) ->
                 try:
                     execute_match(store, games=games, timeout=timeout)
                 except Exception as exc:
-                    store.set_state("error", error=str(exc), current_match=None)
+                    # Cooldowns are temporary. Keep the requested running state so
+                    # the worker automatically retries as soon as two bots return.
+                    if is_temporary_roster_error(exc):
+                        store.set_state("running", error=str(exc), current_match=None)
+                    else:
+                        store.set_state("error", error=str(exc), current_match=None)
                     time.sleep(poll_seconds)
         finally:
             try:
@@ -67,4 +77,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

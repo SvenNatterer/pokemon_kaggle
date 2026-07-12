@@ -15,6 +15,7 @@ import pandas as pd
 from src.agents.rule_based_agent import is_rule_based_model_spec
 from src.bot_loader import load_bot
 from src.arena_core import atomic_write_json
+from src.arena_core import deck_display_name_for_path
 
 def read_deck(deck_path):
     if not deck_path or not os.path.exists(deck_path):
@@ -30,7 +31,7 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
     env = PokemonTCGEnv(my_deck=deck_a, opponent_deck=deck_b, opponent_model_path=model_b_path)
     
     model = None
-    if model_a_path and os.path.exists(model_a_path):
+    if is_rule_based_model_spec(model_a_path) or (model_a_path and os.path.exists(model_a_path)):
         print(f"Loading {model_a_path}...")
         model = load_bot(model_a_path, env=env)
         print("Model loaded successfully.")
@@ -74,21 +75,14 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
                 json_data = visualize_data()
                 data = json.loads(json_data)
                 if len(data) > 0:
-                    deck_name_a = deck_a_path
-                    deck_name_b = deck_b_path
-                    if os.path.exists("decks/deck_names.json"):
-                        try:
-                            with open("decks/deck_names.json", "r") as f:
-                                names = json.load(f)
-                                bname_a = os.path.basename(deck_a_path)[:-4]
-                                ida = bname_a[5:] if bname_a.startswith("deck_") else bname_a
-                                deck_name_a = f"D{ida.replace('bank_', '')} " + names.get(ida, "Unknown")
-                                
-                                bname_b = os.path.basename(deck_b_path)[:-4]
-                                idb = bname_b[5:] if bname_b.startswith("deck_") else bname_b
-                                deck_name_b = f"D{idb.replace('bank_', '')} " + names.get(idb, "Unknown")
-                        except: pass
-                    data[0]["metadata"] = {"p0_name": deck_name_a, "p1_name": deck_name_b}
+                    deck_name_a = deck_display_name_for_path(deck_a_path) if deck_a_path else deck_a_path
+                    deck_name_b = deck_display_name_for_path(deck_b_path) if deck_b_path else deck_b_path
+                    data[0]["metadata"] = {
+                        "p0_name": deck_name_a,
+                        "p1_name": deck_name_b,
+                        "p0_deck": deck_a_path,
+                        "p1_deck": deck_b_path,
+                    }
                     # print(f"Writing {len(json_data)} bytes...")
                     atomic_write_json(out_path, data)
                 else:
@@ -109,22 +103,15 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
         json_data = visualize_data()
         data = json.loads(json_data)
         if len(data) > 0:
-            deck_name_a = deck_a_path
-            deck_name_b = deck_b_path
-            if os.path.exists("decks/deck_names.json"):
-                try:
-                    with open("decks/deck_names.json", "r") as f:
-                        names = json.load(f)
-                        bname_a = os.path.basename(deck_a_path)[:-4]
-                        ida = bname_a[5:] if bname_a.startswith("deck_") else bname_a
-                        deck_name_a = f"D{ida.replace('bank_', '')} " + names.get(ida, "Unknown")
-                        
-                        bname_b = os.path.basename(deck_b_path)[:-4]
-                        idb = bname_b[5:] if bname_b.startswith("deck_") else bname_b
-                        deck_name_b = f"D{idb.replace('bank_', '')} " + names.get(idb, "Unknown")
-                except: pass
-            
-            data[0]["metadata"] = {"p0_name": deck_name_a, "p1_name": deck_name_b}
+            deck_name_a = deck_display_name_for_path(deck_a_path) if deck_a_path else deck_a_path
+            deck_name_b = deck_display_name_for_path(deck_b_path) if deck_b_path else deck_b_path
+
+            data[0]["metadata"] = {
+                "p0_name": deck_name_a,
+                "p1_name": deck_name_b,
+                "p0_deck": deck_a_path,
+                "p1_deck": deck_b_path,
+            }
             atomic_write_json(out_path, data)
         else:
             atomic_write_json(out_path, data)

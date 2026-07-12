@@ -144,11 +144,22 @@ def wilson_lower_bound(successes: float, total: int, z: float = 1.96) -> float:
     return max(0.0, (center - spread) / denom)
 
 
-def parse_result(stdout: str) -> tuple[int, int, int]:
+def parse_result(stdout: str) -> tuple[int, int, int, dict[str, Any]]:
+    details: dict[str, Any] = {}
+    result: tuple[int, int, int] | None = None
     for line in stdout.splitlines():
         if line.startswith("RESULT:"):
             parts = line.split(":", 1)[1].split(",")
-            return int(parts[0]), int(parts[1]), int(parts[2])
+            result = int(parts[0]), int(parts[1]), int(parts[2])
+        elif line.startswith("DETAIL:"):
+            try:
+                details = json.loads(line.split(":", 1)[1])
+            except json.JSONDecodeError:
+                details = {"parse_error": "invalid DETAIL payload"}
+        elif line.startswith("CHILD ERROR:"):
+            raise RuntimeError(line.split(":", 1)[1].strip())
+    if result is not None:
+        return *result, details
     raise ValueError("No RESULT line in evaluation output")
 
 
@@ -174,7 +185,7 @@ def evaluate_pair(
         elapsed = time.monotonic() - started
         if result.returncode != 0:
             raise RuntimeError((result.stderr or result.stdout).strip())
-        wins, losses, draws = parse_result(result.stdout)
+        wins, losses, draws, details = parse_result(result.stdout)
         crashed = False
         error = ""
     except Exception as exc:
@@ -183,6 +194,7 @@ def evaluate_pair(
         losses = games
         crashed = True
         error = str(exc)
+        details = {}
 
     score = wins + 0.5 * draws
     return {
@@ -198,6 +210,7 @@ def evaluate_pair(
         "crashed": crashed,
         "error": error,
         "seconds": elapsed,
+        "details": details,
     }
 
 
@@ -214,6 +227,36 @@ def aggregate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         draws = sum(row["draws"] for row in candidate_rows)
         score = sum(row["score"] for row in candidate_rows)
         worst_row = min(candidate_rows, key=lambda row: row["score_rate"])
+        by_opponent = {
+            row["opponent"]: {
+                "games": row["games"], "score_rate": row["score_rate"],
+                "wins": row["wins"], "losses": row["losses"], "draws": row["draws"],
+            }
+            for row in candidate_rows
+        }
+        perspective = {"player_0": {"games": 0, "wins": 0, "losses": 0, "draws": 0},
+                       "player_1": {"games": 0, "wins": 0, "losses": 0, "draws": 0}}
+        candidate_win_reasons: dict[str, int] = {}
+        opponent_win_reasons: dict[str, int] = {}
+        total_turns = 0.0
+        for row in candidate_rows:
+            details = row.get("details") or {}
+            total_turns += float(details.get("total_turns", 0) or 0)
+            for side, values in (details.get("perspective") or {}).items():
+                if side not in perspective:
+                    continue
+                for key in ("games", "wins", "losses", "draws"):
+                    perspective[side][key] += int(values.get(key, 0) or 0)
+            for target, source in ((candidate_win_reasons, details.get("candidate_win_reasons") or {}),
+                                   (opponent_win_reasons, details.get("opponent_win_reasons") or {})):
+                for reason, count in source.items():
+                    target[reason] = target.get(reason, 0) + int(count)
+        for values in perspective.values():
+            values["score_rate"] = (
+                (values["wins"] + 0.5 * values["draws"]) / values["games"]
+                if values["games"] else 0.0
+            )
+        perspective_gap = abs(perspective["player_0"]["score_rate"] - perspective["player_1"]["score_rate"])
         summaries.append(
             {
                 "candidate": candidate,
@@ -227,6 +270,12 @@ def aggregate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "worst_opponent": worst_row["opponent"],
                 "worst_score_rate": worst_row["score_rate"],
                 "crashes": sum(1 for row in candidate_rows if row["crashed"]),
+                "mean_turns": total_turns / games if games else 0.0,
+                "perspective": perspective,
+                "perspective_score_gap": perspective_gap,
+                "candidate_win_reasons": candidate_win_reasons,
+                "opponent_win_reasons": opponent_win_reasons,
+                "by_opponent": by_opponent,
             }
         )
 
@@ -252,17 +301,17 @@ def print_summary(summaries: list[dict[str, Any]]) -> None:
     print("\nHoldout leaderboard")
     print("-------------------")
     print(
-        f"{'rank':>4s}  {'model':38s} {'score':>7s} {'win':>7s} "
-        f"{'wilson':>7s} {'worst':>7s} {'crash':>5s}  worst opponent"
+        f"{'rank':>4s}  {'model':32s} {'score':>7s} {'wilson':>7s} "
+        f"{'worst':>7s} {'p-gap':>7s} {'turns':>7s}  worst opponent"
     )
     for rank, row in enumerate(summaries, 1):
         print(
-            f"{rank:4d}  {row['candidate'][:38]:38s} "
+            f"{rank:4d}  {row['candidate'][:32]:32s} "
             f"{row['score_rate'] * 100:6.1f}% "
-            f"{row['win_rate'] * 100:6.1f}% "
             f"{row['wilson95_score_lb'] * 100:6.1f}% "
             f"{row['worst_score_rate'] * 100:6.1f}% "
-            f"{row['crashes']:5d}  {row['worst_opponent']}"
+            f"{row['perspective_score_gap'] * 100:6.1f}% "
+            f"{row['mean_turns']:7.1f}  {row['worst_opponent']}"
         )
 
 
@@ -285,6 +334,10 @@ def main() -> int:
     parser.add_argument("--init", action="store_true", help="Create or refresh the holdout file and exit.")
     parser.add_argument("--list", action="store_true", help="Print candidates and opponents without evaluating.")
     parser.add_argument("--no-save", action="store_true")
+    parser.add_argument(
+        "--best-candidate-file", default="",
+        help="Optional JSON destination for the top candidate selected by Wilson lower bound.",
+    )
     parser.add_argument("--progress-file", default="", help="Optional JSON progress file for the arena dashboard.")
     parser.set_defaults(include_variants=True)
     args = parser.parse_args()
@@ -364,6 +417,18 @@ def main() -> int:
         }
         atomic_write_json(args.results_file, payload)
         print(f"\nSaved results to {args.results_file}")
+
+    if args.best_candidate_file:
+        best = summaries[0]
+        atomic_write_json(args.best_candidate_file, {
+            "selected_at": utc_now(),
+            "selection_metric": "wilson95_score_lb, worst_score_rate, score_rate",
+            "candidate": best["candidate"],
+            "summary": best,
+            "holdout_file": args.holdout_file,
+            "games_per_pair": args.games,
+        })
+        print(f"Selected best candidate: {best['candidate']} -> {args.best_candidate_file}")
 
     return 0
 

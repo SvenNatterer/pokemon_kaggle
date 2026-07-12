@@ -6,6 +6,7 @@ from unittest import mock
 
 from src.arena_control import ArenaController
 from src.arena_core import ArenaStore
+from src.arena_worker import is_temporary_roster_error
 
 
 class ArenaControllerTests(unittest.TestCase):
@@ -42,7 +43,11 @@ class ArenaControllerTests(unittest.TestCase):
             self.controller.reset()
         self.assertEqual(self.store.matches(), [])
 
+    def test_roster_cooldown_error_is_retryable(self):
+        error = RuntimeError("at least two enabled, loadable participants are required")
+        self.assertTrue(is_temporary_roster_error(error))
+        self.assertFalse(is_temporary_roster_error(RuntimeError("other failure")))
+
 
 if __name__ == "__main__":
     unittest.main()
-
