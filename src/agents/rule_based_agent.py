@@ -28,17 +28,23 @@ VECTOR_STOP_LEGAL_INDEX = 1491
 
 ENTITY_ACTIVE_SLOT = 0
 
+RULE_BASED_ALIASES = {"rule", "rule_based", "rule-based", "heuristic", "baseline"}
+RULE_BASED_PROFILES = {"balanced", "aggressive", "setup", "defensive"}
+
 
 def is_rule_based_model_spec(value: Any) -> bool:
     if value is None:
         return False
-    return str(value).strip().lower() in {
-        "rule",
-        "rule_based",
-        "rule-based",
-        "heuristic",
-        "baseline",
-    }
+    normalized = str(value).strip().lower()
+    base, separator, profile = normalized.partition(":")
+    return base in RULE_BASED_ALIASES and (not separator or profile in RULE_BASED_PROFILES)
+
+
+def rule_based_profile_from_spec(value: Any) -> str:
+    """Return the strategy suffix from e.g. ``rule_based:aggressive``."""
+    normalized = str(value or "rule_based").strip().lower()
+    _, separator, profile = normalized.partition(":")
+    return profile if separator and profile in RULE_BASED_PROFILES else "balanced"
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -82,6 +88,8 @@ class CardMeta:
     is_mega_ex: bool
     is_tera: bool
     is_ace_spec: bool
+    name: str
+    rules_text: str
 
     @property
     def stage_rank(self) -> int:
@@ -114,6 +122,11 @@ class ParsedState:
     pending_count: int
     stop_legal: bool
     entity_features: np.ndarray
+    entity_ids: np.ndarray
+    hand_ids: np.ndarray
+    discard_ids: np.ndarray
+    search_ids: np.ndarray
+    context_card_ids: np.ndarray
 
     @property
     def phase(self) -> str:
@@ -178,6 +191,8 @@ def _card_meta_by_id() -> dict[int, CardMeta]:
             is_mega_ex=bool(getattr(card, "megaEx", False)),
             is_tera=bool(getattr(card, "tera", False)),
             is_ace_spec=bool(getattr(card, "aceSpec", False)),
+            name=str(getattr(card, "name", "") or ""),
+            rules_text=" ".join(str(getattr(skill, "text", "") or "") for skill in (getattr(card, "skills", None) or [])),
         )
     return catalog
 
@@ -212,6 +227,11 @@ class PokemonObservationAdapter:
         option_attack_ids = self._as_vector(observation.get("option_attack_ids"), dtype=np.int32)
         option_features = self._as_matrix(observation.get("option_features"), rows=MAX_ENCODED_OPTIONS)
         entity_features = self._as_matrix(observation.get("entity_features"), rows=12)
+        entity_ids = self._as_vector(observation.get("entity_ids"), dtype=np.int32)
+        hand_ids = self._as_vector(observation.get("hand_ids"), dtype=np.int32)
+        discard_ids = self._as_matrix(observation.get("discard_ids"), rows=2)
+        search_ids = self._as_vector(observation.get("search_ids"), dtype=np.int32)
+        context_card_ids = self._as_vector(observation.get("context_card_ids"), dtype=np.int32)
 
         state = ParsedState(
             turn=int(vector[VECTOR_TURN_INDEX]) if vector.size > VECTOR_TURN_INDEX else 0,
@@ -225,6 +245,11 @@ class PokemonObservationAdapter:
             pending_count=int(vector[VECTOR_PENDING_COUNT_INDEX]) if vector.size > VECTOR_PENDING_COUNT_INDEX else 0,
             stop_legal=bool(vector[VECTOR_STOP_LEGAL_INDEX]) if vector.size > VECTOR_STOP_LEGAL_INDEX else False,
             entity_features=entity_features,
+            entity_ids=entity_ids,
+            hand_ids=hand_ids,
+            discard_ids=discard_ids,
+            search_ids=search_ids,
+            context_card_ids=context_card_ids,
         )
 
         options: list[OptionRecord] = []
@@ -290,17 +315,21 @@ class RuleBasedPokemonAgent:
         seed: int | None = None,
         logger: logging.Logger | None = None,
         debug: bool = False,
+        profile: str = "balanced",
     ) -> None:
         if temperature < 0:
             raise ValueError("temperature must be non-negative")
         if not 0.0 <= epsilon <= 1.0:
             raise ValueError("epsilon must be between 0 and 1")
+        if profile not in RULE_BASED_PROFILES:
+            raise ValueError(f"unknown rule-based profile: {profile}")
 
         self.temperature = float(temperature)
         self.epsilon = float(epsilon)
         self.rng = random.Random(seed)
         self.logger = logger or LOGGER
         self.debug = bool(debug)
+        self.profile = profile
         self.adapter = PokemonObservationAdapter()
         self.last_decision: dict[str, Any] | None = None
 
@@ -401,8 +430,9 @@ class RuleBasedPokemonAgent:
             nonlocal score
             if value == 0:
                 return
-            score += value
-            reason[name] = reason.get(name, 0.0) + value
+            adjusted = value * self._profile_multiplier(name)
+            score += adjusted
+            reason[name] = reason.get(name, 0.0) + adjusted
 
         card_meta = _card_meta_by_id().get(option.card_id)
         attack_meta = _attack_meta_by_id().get(option.attack_id)
@@ -430,7 +460,7 @@ class RuleBasedPokemonAgent:
             add("play_value", self._play_value(card_meta, parsed_state))
 
         elif option.option_type == int(OptionType.CARD):
-            add("card_value", self._card_value(card_meta, parsed_state))
+            add("card_value", self._card_value(card_meta, parsed_state, option))
 
         elif option.option_type == int(OptionType.YES):
             add("yes_value", self._yes_no_value(parsed_state, True))
@@ -469,6 +499,25 @@ class RuleBasedPokemonAgent:
             add("neutral_fallback", -0.5)
 
         return ActionScore(index=option.index, score=score, reason=reason)
+
+    def _profile_multiplier(self, reason: str) -> float:
+        """Apply broad priorities while keeping one auditable scoring engine."""
+        groups = {
+            "attack": reason.startswith("attack"),
+            "setup": reason.startswith(("attach", "evolve", "energy", "pokemon")),
+            "defense": reason.startswith("retreat"),
+            "resource": reason.startswith(("play", "card", "supporter", "item", "stadium", "skill")),
+        }
+        weights = {
+            "balanced": {},
+            "aggressive": {"attack": 1.35, "setup": 0.85, "defense": 0.70, "resource": 0.90},
+            "setup": {"attack": 0.82, "setup": 1.35, "defense": 0.90, "resource": 1.15},
+            "defensive": {"attack": 0.92, "setup": 1.05, "defense": 1.60, "resource": 1.10},
+        }[self.profile]
+        for group, matches in groups.items():
+            if matches:
+                return weights.get(group, 1.0)
+        return 1.0
 
     @staticmethod
     def _phase_attack_bonus(phase: str) -> float:
@@ -547,20 +596,46 @@ class RuleBasedPokemonAgent:
         if card_meta.card_type == int(CardType.POKEMON):
             return 16.0 if card_meta.is_basic and parsed_state.phase == "SETUP" else 5.0
         if card_meta.card_type == int(CardType.SUPPORTER):
-            return 20.0 if parsed_state.my_hand <= 4 else 10.0
+            return self._trainer_play_value(card_meta, parsed_state, base=20.0 if parsed_state.my_hand <= 4 else 10.0)
         if card_meta.card_type == int(CardType.ITEM):
-            return 10.0 if parsed_state.phase != "ENDGAME" else 6.0
+            return self._trainer_play_value(card_meta, parsed_state, base=10.0 if parsed_state.phase != "ENDGAME" else 6.0)
         if card_meta.card_type == int(CardType.STADIUM):
-            return 8.0 if parsed_state.phase != "SETUP" else 3.0
+            return self._trainer_play_value(card_meta, parsed_state, base=8.0 if parsed_state.phase != "SETUP" else 3.0)
         if card_meta.card_type in {int(CardType.BASIC_ENERGY), int(CardType.SPECIAL_ENERGY)}:
             return 6.0
         return 2.0
 
-    def _card_value(self, card_meta: CardMeta | None, parsed_state: ParsedState) -> float:
+    def _card_value(self, card_meta: CardMeta | None, parsed_state: ParsedState, option: OptionRecord) -> float:
         if card_meta is None:
             return 0.0
+        effect = self._resolving_card(parsed_state)
+        effect_name = self._normalized_name(effect)
+
+        if parsed_state.select_context == int(SelectContext.DISCARD):
+            value = -self._resource_value(card_meta, parsed_state)
+            if "ultra ball" in effect_name:
+                value += 5.0 if self._duplicate_in_hand(card_meta.card_id, parsed_state) else 0.0
+            return value
+
+        if parsed_state.select_context in {int(SelectContext.SWITCH), int(SelectContext.TO_ACTIVE)}:
+            return self._switch_target_value(parsed_state, option)
+
+        if parsed_state.select_context in {int(SelectContext.ATTACH_FROM), int(SelectContext.ATTACH_TO)}:
+            return self._energy_target_value(card_meta, parsed_state, option)
+
+        if "cyrano" in effect_name:
+            return 18.0 if card_meta.is_ex else -20.0
+        if "crispin" in effect_name:
+            return self._searched_energy_value(card_meta, parsed_state)
+        if "night stretcher" in effect_name:
+            return self._recovery_value(card_meta, parsed_state)
+        if "ultra ball" in effect_name:
+            return self._pokemon_search_value(card_meta, parsed_state)
+        if "ciphermaniac" in effect_name:
+            return self._resource_value(card_meta, parsed_state) + (5.0 if card_meta.card_type == int(CardType.SUPPORTER) else 0.0)
+
         if card_meta.card_type == int(CardType.POKEMON):
-            return 12.0 if card_meta.is_basic else 6.0
+            return self._pokemon_search_value(card_meta, parsed_state)
         if card_meta.card_type == int(CardType.SUPPORTER):
             return 18.0 if parsed_state.my_hand <= 5 else 9.0
         if card_meta.card_type == int(CardType.ITEM):
@@ -568,6 +643,138 @@ class RuleBasedPokemonAgent:
         if card_meta.card_type in {int(CardType.BASIC_ENERGY), int(CardType.SPECIAL_ENERGY)}:
             return 4.0
         return 4.0
+
+    def _trainer_play_value(self, card: CardMeta, state: ParsedState, base: float) -> float:
+        name = self._normalized_name(card)
+        own_discard = set(int(value) for value in state.discard_ids[0] if int(value) > 0) if state.discard_ids.size else set()
+        bench_count = sum(1 for row in state.entity_features[1:6] if row.size and row[0] > 0)
+
+        if "boss's orders" in name:
+            return 24.0 if self._opponent_has_bench(state) else -30.0
+        if "prime catcher" in name:
+            return 28.0 if self._opponent_has_bench(state) and bench_count else -25.0
+        if "cyrano" in name:
+            ex_available = any((_card_meta_by_id().get(int(cid)) or card).is_ex for cid in state.search_ids if int(cid) > 0)
+            return 22.0 if ex_available or state.phase == "SETUP" else 5.0
+        if "crispin" in name:
+            return 26.0 if self._board_has_energy_deficit(state) else 4.0
+        if "ultra ball" in name:
+            return 24.0 if state.my_hand >= 3 else -30.0
+        if "energy switch" in name:
+            return 20.0 if self._can_improve_energy_layout(state) else -12.0
+        if "night stretcher" in name:
+            return 18.0 if own_discard else -20.0
+        if "glass trumpet" in name:
+            return 22.0 if own_discard and bench_count else -15.0
+        if "judge" in name:
+            return float((state.opp_hand - state.my_hand) * 4 + (8 if state.my_hand <= 2 else -4))
+        if "lillie's determination" in name or "lillie’s determination" in name:
+            target = 8 if state.my_prizes == 6 else 6
+            return float((target - state.my_hand) * 5)
+        if "area zero underdepths" in name:
+            has_tera = any(self._entity_card_meta(state, slot) and self._entity_card_meta(state, slot).is_tera for slot in range(6))
+            return 18.0 if has_tera and bench_count >= 4 else (-12.0 if not has_tera else 3.0)
+        return base
+
+    @staticmethod
+    def _normalized_name(card: CardMeta | None) -> str:
+        return (card.name if card else "").strip().lower().replace("’", "'")
+
+    def _resolving_card(self, state: ParsedState) -> CardMeta | None:
+        for index in (1, 0):
+            if state.context_card_ids.size > index:
+                card = _card_meta_by_id().get(int(state.context_card_ids[index]))
+                if card is not None:
+                    return card
+        return None
+
+    @staticmethod
+    def _duplicate_in_hand(card_id: int, state: ParsedState) -> bool:
+        return sum(int(value) == card_id for value in state.hand_ids) > 1
+
+    def _resource_value(self, card: CardMeta, state: ParsedState) -> float:
+        if card.card_type == int(CardType.POKEMON):
+            return self._pokemon_search_value(card, state)
+        if card.card_type == int(CardType.SUPPORTER):
+            return 14.0
+        if card.card_type in {int(CardType.BASIC_ENERGY), int(CardType.SPECIAL_ENERGY)}:
+            return 10.0 if self._board_has_energy_deficit(state) else 5.0
+        return 7.0 if card.card_type == int(CardType.ITEM) else 5.0
+
+    def _pokemon_search_value(self, card: CardMeta, state: ParsedState) -> float:
+        if card.card_type != int(CardType.POKEMON):
+            return -20.0
+        already_in_play = any(self._entity_card_meta(state, slot) and self._entity_card_meta(state, slot).card_id == card.card_id for slot in range(6))
+        value = card.hp / 20.0 + card.attack_count * 4.0 + (8.0 if card.is_ex else 0.0)
+        value += 10.0 if card.is_basic and state.phase == "SETUP" else 0.0
+        value -= 6.0 if already_in_play else 0.0
+        return value
+
+    def _searched_energy_value(self, card: CardMeta, state: ParsedState) -> float:
+        if card.card_type != int(CardType.BASIC_ENERGY):
+            return -20.0
+        needed_types = set()
+        for slot in range(6):
+            pokemon = self._entity_card_meta(state, slot)
+            if pokemon and pokemon.energy_type > 0:
+                needed_types.add(pokemon.energy_type)
+        return 14.0 if card.energy_type in needed_types else 7.0
+
+    def _recovery_value(self, card: CardMeta, state: ParsedState) -> float:
+        if card.card_type == int(CardType.POKEMON):
+            return self._pokemon_search_value(card, state) + 3.0
+        if card.card_type == int(CardType.BASIC_ENERGY):
+            return 13.0 if self._board_has_energy_deficit(state) else 6.0
+        return -20.0
+
+    def _switch_target_value(self, state: ParsedState, option: OptionRecord) -> float:
+        opponent = bool(option.features.size and option.features[0] > 0.5)
+        index = self._card_slot(option)
+        slot = (6 if opponent else 0) + index
+        target = self._slot_features(state, slot)
+        if target is None or not target.size or target[0] <= 0:
+            return 0.0
+        missing_hp = float(target[6]) * 400.0
+        ready = float(target[27] + target[28]) if target.size > 28 else 0.0
+        if opponent:
+            return missing_hp + (18.0 if ready == 0 else 0.0)
+        return ready * 20.0 - missing_hp * 0.2
+
+    @staticmethod
+    def _card_slot(option: OptionRecord) -> int:
+        """Map a CARD option's source area/index to an entity slot."""
+        if option.option_area == int(AreaType.ACTIVE):
+            return 0
+        if option.option_area == int(AreaType.BENCH) and option.features.size > 1:
+            source_index = _clamp_int(float(option.features[1]) * 60.0, 0, 4)
+            return source_index + 1
+        return RuleBasedPokemonAgent._target_slot(option)
+
+    def _energy_target_value(self, card: CardMeta, state: ParsedState, option: OptionRecord) -> float:
+        target = self._slot_features(state, self._target_slot(option))
+        if target is None or target.size < 29:
+            return self._resource_value(card, state)
+        deficit = min(float(target[25]), float(target[26])) * 5.0
+        return 12.0 + deficit * 5.0 + (5.0 if self._target_slot(option) == 0 else 0.0)
+
+    def _entity_card_meta(self, state: ParsedState, slot: int) -> CardMeta | None:
+        if slot < 0 or slot >= state.entity_ids.size:
+            return None
+        return _card_meta_by_id().get(int(state.entity_ids[slot]))
+
+    @staticmethod
+    def _opponent_has_bench(state: ParsedState) -> bool:
+        return any(row.size and row[0] > 0 for row in state.entity_features[7:12])
+
+    @staticmethod
+    def _board_has_energy_deficit(state: ParsedState) -> bool:
+        return any(row.size > 26 and row[0] > 0 and min(float(row[25]), float(row[26])) > 0 for row in state.entity_features[:6])
+
+    @staticmethod
+    def _can_improve_energy_layout(state: ParsedState) -> bool:
+        donors = any(row.size > 20 and row[0] > 0 and float(row[20]) * 8.0 >= 2 for row in state.entity_features[:6])
+        receivers = RuleBasedPokemonAgent._board_has_energy_deficit(state)
+        return donors and receivers
 
     @staticmethod
     def _yes_no_value(parsed_state: ParsedState, is_yes: bool) -> float:

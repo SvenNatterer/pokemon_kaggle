@@ -48,6 +48,7 @@ class ArenaController:
         self.store.set_state("running", error="")
         subprocess.Popen(
             [sys.executable, "-m", "src.arena_worker"], cwd=ROOT,
+            stdin=subprocess.DEVNULL,
             stdout=(ARENA_DIR / "worker.log").open("a", encoding="utf-8"),
             stderr=subprocess.STDOUT, start_new_session=True,
         )

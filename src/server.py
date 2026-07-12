@@ -22,7 +22,23 @@ evaluation_process = None
 arena_store = ArenaStore()
 arena_controller = ArenaController(arena_store)
 DECK_NAMES_FILE = os.path.join(BASE_DIR, "decks", "deck_names.json")
+BOT_NAMES_FILE = os.path.join(BASE_DIR, "decks", "bot_names.json")
 CHAMPION_FILE = os.path.join(BASE_DIR, "models", "champion.json")
+
+
+def evaluation_payload():
+    """Return evaluation state together with its persisted result and winner."""
+    evaluation = read_json(EVALUATION_FILE, {"state": "idle"})
+    evaluation = evaluation if isinstance(evaluation, dict) else {"state": "idle"}
+    for key, target in (("result_file", "results"), ("selection_file", "selection")):
+        relative = str(evaluation.get(key) or "").replace("\\", "/")
+        if relative.startswith("arena_data/evaluation_results/"):
+            payload = read_json(os.path.join(BASE_DIR, relative), {})
+            if target == "results":
+                evaluation[target] = payload.get("summary", []) if isinstance(payload, dict) else []
+            else:
+                evaluation[target] = payload if isinstance(payload, dict) else {}
+    return evaluation
 
 @app.after_request
 def add_cors_headers(response):
@@ -43,13 +59,19 @@ def serve_static(path):
 @app.route("/api/status", methods=["GET"])
 def status():
     participants = discover_participants()
+    bot_names = read_json(BOT_NAMES_FILE, {})
+    if isinstance(bot_names, dict):
+        for participant in participants:
+            custom_name = str(bot_names.get(participant.bot_id) or "").strip()
+            if custom_name:
+                participant.display_name = custom_name
     matches = arena_store.matches()
     board = rank_participants(participants, matches, load_holdout_results())
     champion = read_json(CHAMPION_FILE, {})
     champion_id = str(champion.get("candidate", ""))
     for row in board:
         row["is_champion"] = row["bot_id"] == champion_id
-    evaluation = read_json(EVALUATION_FILE, {"state": "idle"})
+    evaluation = evaluation_payload()
     arena = arena_controller.status()
     return jsonify({
         "arena": arena,
@@ -141,6 +163,23 @@ def set_deck_name():
     atomic_write_json(DECK_NAMES_FILE, names)
     return jsonify({"success": True, "message": "Deck name saved."})
 
+
+@app.route('/api/bot-names', methods=['POST'])
+def set_bot_name():
+    data = request.get_json(silent=True) or {}
+    bot_id = str(data.get("bot_id") or "").strip()
+    name = str(data.get("name") or "").strip()
+    known_ids = {participant.bot_id for participant in discover_participants()}
+    if bot_id not in known_ids:
+        return jsonify({"success": False, "message": "Unknown bot/checkpoint."}), 400
+    if not name or len(name) > 100:
+        return jsonify({"success": False, "message": "Bot name must contain 1 to 100 characters."}), 400
+    names = read_json(BOT_NAMES_FILE, {})
+    names = names if isinstance(names, dict) else {}
+    names[bot_id] = name
+    atomic_write_json(BOT_NAMES_FILE, names)
+    return jsonify({"success": True, "message": "Checkpoint name saved."})
+
 @app.route('/api/available_decks', methods=['GET'])
 def get_available_decks():
     import glob
@@ -166,11 +205,9 @@ def get_watched():
 @app.route('/api/watched', methods=['POST'])
 def set_watched():
     data = request.json or {}
-    watched = data.get('watched', [])
+    watched = sorted({str(bot_id) for bot_id in data.get('watched', []) if str(bot_id)})
     try:
-        os.makedirs(os.path.dirname(WATCHED_FILE), exist_ok=True)
-        with open(WATCHED_FILE, 'w') as f:
-            json.dump({"watched": watched}, f, indent=2)
+        atomic_write_json(WATCHED_FILE, {"watched": watched})
         return jsonify({"success": True, "watched": watched})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -303,7 +340,7 @@ def start_evaluation():
 
 @app.route('/api/evaluation', methods=['GET'])
 def get_evaluation():
-    return jsonify(read_json(EVALUATION_FILE, {"state": "idle"}))
+    return jsonify(evaluation_payload())
 
 @app.route('/api/champion/promote', methods=['POST'])
 def promote_champion():
@@ -311,7 +348,7 @@ def promote_champion():
     selection_file = str(data.get("selection_file") or read_json(EVALUATION_FILE, {}).get("selection_file") or "")
     if not selection_file or not selection_file.startswith("arena_data/"):
         return jsonify({"success": False, "message": "Run a completed dashboard evaluation before promotion."}), 400
-    command = [sys.executable, "scripts/promote_champion.py", "--selection", selection_file,
+    command = [sys.executable, "-m", "scripts.promote_champion", "--selection", selection_file,
                "--champion-file", "models/champion.json",
                "--min-wilson-improvement", str(float(data.get("min_wilson_improvement", 0.0))),
                "--max-perspective-gap", str(float(data.get("max_perspective_gap", 0.10)))]

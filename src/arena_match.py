@@ -19,11 +19,13 @@ from src.arena_core import (
     rank_participants,
     select_matchup,
     mark_bot_failure,
+    read_json,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REPLAY_INTERVAL = 10
+REPLAY_INTERVAL = 15
+WATCHED_FILE = ROOT / "decks" / "watched_models.json"
 
 
 def parse_result(stdout: str) -> tuple[int, int, int, str, dict[str, Any]]:
@@ -69,11 +71,32 @@ def schedule_replay(first: Participant, second: Participant, match_id: str) -> s
                 "--out", relative_path.as_posix(),
             ],
             cwd=ROOT,
+            stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
     return relative_path.as_posix()
+
+
+def should_schedule_replay(
+    first: Participant,
+    second: Participant,
+    matches: list[dict[str, Any]],
+    watched_ids: set[str],
+) -> bool:
+    """Replay every 15th successful arena match of either watched bot."""
+    for participant in (first, second):
+        if participant.bot_id not in watched_ids:
+            continue
+        completed = sum(
+            1 for match in matches
+            if not match.get("error_status")
+            and participant.bot_id in {match.get("bot_a"), match.get("bot_b")}
+        )
+        if (completed + 1) % REPLAY_INTERVAL == 0:
+            return True
+    return False
 
 
 def execute_match(store: ArenaStore, games: int = 4, timeout: int = 300) -> dict[str, Any]:
@@ -96,7 +119,10 @@ def execute_match(store: ArenaStore, games: int = 4, timeout: int = 300) -> dict
         str(games),
     ]
     try:
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            command, cwd=ROOT, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=timeout,
+        )
         wins_first, wins_second, draws, error, details = parse_result(result.stdout)
         if result.returncode != 0:
             error = (result.stderr or result.stdout).strip() or error
@@ -128,7 +154,9 @@ def execute_match(store: ArenaStore, games: int = 4, timeout: int = 300) -> dict
         # Symmetric batch update keeps total rating mass stable.
         record["elo_a_after"] = record["elo_a_before"] + delta_a
         record["elo_b_after"] = record["elo_b_before"] - delta_a
-        if (len(matches) + 1) % REPLAY_INTERVAL == 0:
+        watched = read_json(WATCHED_FILE, {"watched": []}).get("watched", [])
+        watched_ids = {str(bot_id) for bot_id in watched}
+        if should_schedule_replay(first, second, matches, watched_ids):
             record["replay_ref"] = schedule_replay(first, second, record["match_id"])
     store.append_match(record)
     board = rank_participants(participants, store.matches(), load_holdout_results())

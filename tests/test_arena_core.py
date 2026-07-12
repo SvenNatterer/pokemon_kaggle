@@ -28,25 +28,35 @@ class RankingTests(unittest.TestCase):
         self.assertAlmostEqual(wilson_lower_bound(0, 0, 2), wilson_lower_bound(1, 1, 0))
         self.assertGreater(wilson_lower_bound(10, 0, 0), wilson_lower_bound(1, 0, 0))
 
-    def test_identical_elos_normalize_to_half(self):
+    def test_default_elos_normalize_to_half(self):
         rows = rank_participants([participant("a"), participant("b")], [])
         self.assertEqual({row["normalized_elo"] for row in rows}, {0.5})
 
-    def test_missing_holdout_is_visible_and_conservative(self):
+    def test_holdout_is_visible_but_does_not_influence_ranking(self):
         rows = rank_participants([participant("a"), participant("b")], [], {
             "a": {"games": 100, "score_rate": 0.9, "wilson95_score_lb": 0.8}
         })
         values = {row["bot_id"]: row for row in rows}
         self.assertFalse(values["a"]["holdout_missing"])
         self.assertTrue(values["b"]["holdout_missing"])
-        self.assertEqual(values["b"]["ranking_components"]["holdout"], 0.35)
-        self.assertGreater(values["a"]["ranking_score"], values["b"]["ranking_score"])
+        self.assertNotIn("holdout", values["a"]["ranking_components"])
+        self.assertEqual(values["a"]["ranking_score"], values["b"]["ranking_score"])
+
+    def test_elo_component_is_independent_of_other_participants(self):
+        matches = [{"bot_a": "a", "bot_b": "b", "wins_a": 3, "wins_b": 1, "draws": 0,
+                    "elo_a_after": 1232, "elo_b_after": 1168, "error_status": ""}]
+        before = {row["bot_id"]: row for row in rank_participants([participant("a"), participant("b")], matches)}
+        after = {row["bot_id"]: row for row in rank_participants(
+            [participant("a"), participant("b"), participant("c")], matches
+        )}
+        self.assertEqual(before["a"]["normalized_elo"], after["a"]["normalized_elo"])
+        self.assertEqual(before["b"]["normalized_elo"], after["b"]["normalized_elo"])
 
     def test_ranking_components_match_documented_formula(self):
         row = rank_participants([participant("a")], [])[0]
         components = row["ranking_components"]
-        expected = 0.35 * components["arena_wilson"] + 0.25 * components["normalized_elo"]
-        expected += 0.15 * components["arena_winrate"] + 0.25 * components["holdout"]
+        expected = 0.50 * components["arena_wilson"] + 0.35 * components["normalized_elo"]
+        expected += 0.15 * components["arena_winrate"]
         self.assertAlmostEqual(row["ranking_score"], expected)
 
 

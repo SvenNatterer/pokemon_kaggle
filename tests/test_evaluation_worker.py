@@ -20,12 +20,27 @@ class EvaluationWorkerTests(unittest.TestCase):
         self.assertTrue(first.name.startswith("bot_one_"))
         self.assertEqual(first.suffix, ".json")
 
+    def test_multi_candidate_result_filename_stays_below_filesystem_limit(self):
+        bot_ids = ",".join(f"stage_snapshots__very_long_checkpoint_{index}_" + "x" * 60 for index in range(20))
+        with tempfile.TemporaryDirectory() as temp, mock.patch(
+            "src.evaluation_worker.ROOT", Path(temp)
+        ):
+            result_file = create_result_file(bot_ids)
+            selection_file = result_file.with_name(result_file.stem + "_selection.json")
+
+        self.assertTrue(result_file.name.startswith("batch_20_candidates_"))
+        self.assertLess(len(selection_file.name.encode("utf-8")), 200)
+
     def test_evaluation_parser_keeps_game_diagnostics(self):
         wins, losses, draws, details = parse_result(
             'RESULT:2,1,0\nDETAIL:{"total_turns": 12, "perspective": {}}'
         )
         self.assertEqual((wins, losses, draws), (2, 1, 0))
         self.assertEqual(details["total_turns"], 12)
+
+    def test_evaluation_parser_preserves_child_error(self):
+        with self.assertRaisesRegex(RuntimeError, "missing model"):
+            parse_result("CHILD ERROR: missing model")
 
     def test_summary_reports_perspective_gap_and_failure_reasons(self):
         rows = [{

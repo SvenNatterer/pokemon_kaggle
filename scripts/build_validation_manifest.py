@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import shutil
 
 from scripts.evaluate_submission import discover_entries, unique_by_deck
 
@@ -24,6 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="decks/validation_opponents.json")
     parser.add_argument("--model-pool", default="models")
+    parser.add_argument("--validation-model-dir", default="models/validation")
     parser.add_argument("--final-holdout", default="decks/holdout_opponents.json")
     parser.add_argument("--exclude-deck", action="append", default=[])
     parser.add_argument("--count", type=int, default=8)
@@ -34,15 +36,27 @@ def main() -> int:
     if len(entries) < args.count:
         raise RuntimeError(f"Need {args.count} eligible models, found {len(entries)}. Add models or reduce --count.")
     selected = sorted(entries, key=lambda item: item["label"])[:args.count]
+    validation_dir = ROOT / args.validation_model_dir
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    frozen = []
+    for entry in selected:
+        source = (ROOT / entry["model_path"]).resolve()
+        destination = validation_dir / source.name
+        if source != destination.resolve():
+            shutil.copy2(source, destination)
+        frozen.append({
+            **entry,
+            "model_path": destination.relative_to(ROOT).as_posix(),
+        })
     payload = {
         "version": 1,
         "purpose": "Repeatable model selection only; never train against these exact opponents.",
-        "opponents": selected,
+        "opponents": frozen,
     }
     destination = ROOT / args.out
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"Wrote validation manifest with {len(selected)} opponents: {destination}")
+    print(f"Wrote validation manifest with {len(frozen)} frozen opponents: {destination}")
     return 0
 
 

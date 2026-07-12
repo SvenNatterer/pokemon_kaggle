@@ -5,7 +5,7 @@ import os
 
 from src.cg.game import battle_start, battle_select, battle_finish
 from src.cg.api import AreaType, OptionType, SelectContext, to_observation_class, Observation, all_card_data, all_attack, CardType, LogType
-from src.agents.rule_based_agent import RuleBasedPokemonAgent, is_rule_based_model_spec
+from src.agents.rule_based_agent import RuleBasedPokemonAgent, is_rule_based_model_spec, rule_based_profile_from_spec
 from src.model_paths import strip_zip_suffix
 
 RESULT_REASON_PRIZE = 1
@@ -398,7 +398,9 @@ class PokemonTCGEnv(gym.Env):
                 self.opponent_model = cached_model
         if self.opponent_model_path is not None and self.opponent_model is None:
             if is_rule_based_model_spec(self.opponent_model_path):
-                self.opponent_model = RuleBasedPokemonAgent()
+                self.opponent_model = RuleBasedPokemonAgent(
+                    profile=rule_based_profile_from_spec(self.opponent_model_path)
+                )
             else:
                 self.opponent_model_path = strip_zip_suffix(self.opponent_model_path)
                 # We import here to avoid circular imports if necessary

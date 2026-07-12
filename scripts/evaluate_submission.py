@@ -156,6 +156,8 @@ def parse_result(stdout: str) -> tuple[int, int, int, dict[str, Any]]:
                 details = json.loads(line.split(":", 1)[1])
             except json.JSONDecodeError:
                 details = {"parse_error": "invalid DETAIL payload"}
+        elif line.startswith("CHILD ERROR:"):
+            raise RuntimeError(line.split(":", 1)[1].strip())
     if result is not None:
         return *result, details
     raise ValueError("No RESULT line in evaluation output")
@@ -405,6 +407,17 @@ def main() -> int:
     summaries = aggregate(rows)
     print_summary(summaries)
 
+    if not args.no_save:
+        payload = {
+            "holdout_file": args.holdout_file,
+            "games_per_pair": args.games,
+            "created_at": int(time.time()),
+            "summary": summaries,
+            "matches": rows,
+        }
+        atomic_write_json(args.results_file, payload)
+        print(f"\nSaved results to {args.results_file}")
+
     if args.best_candidate_file:
         best = summaries[0]
         atomic_write_json(args.best_candidate_file, {
@@ -416,17 +429,6 @@ def main() -> int:
             "games_per_pair": args.games,
         })
         print(f"Selected best candidate: {best['candidate']} -> {args.best_candidate_file}")
-
-    if not args.no_save:
-        payload = {
-            "holdout_file": args.holdout_file,
-            "games_per_pair": args.games,
-            "created_at": int(time.time()),
-            "summary": summaries,
-            "matches": rows,
-        }
-        atomic_write_json(args.results_file, payload)
-        print(f"\nSaved results to {args.results_file}")
 
     return 0
 

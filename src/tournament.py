@@ -11,6 +11,16 @@ from src.custom_ppo import CustomPPO
 from src.model_paths import discover_deck_models, resolve_deck_model_path, strip_zip_suffix
 from src.bot_loader import load_bot
 
+
+def build_evaluation_env(learner_deck, opponent_deck, opponent_model_path, learner_perspective):
+    """Keep deck ownership stable; the environment places decks by perspective."""
+    return PokemonTCGEnv(
+        my_deck=learner_deck,
+        opponent_deck=opponent_deck,
+        opponent_model_path=opponent_model_path,
+        learner_perspective=learner_perspective,
+    )
+
 def read_deck(deck_path):
     df = pd.read_csv(deck_path, header=None)
     return df[0].tolist()
@@ -99,20 +109,9 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
         nonlocal prize_wins_2, deckout_wins_2, benchout_wins_2
         nonlocal total_turns
 
-        if learner_perspective == 0:
-            env = PokemonTCGEnv(
-                my_deck=learner_deck,
-                opponent_deck=opponent_deck,
-                opponent_model_path=opponent_model_path,
-                learner_perspective=0,
-            )
-        else:
-            env = PokemonTCGEnv(
-                my_deck=opponent_deck,
-                opponent_deck=learner_deck,
-                opponent_model_path=opponent_model_path,
-                learner_perspective=1,
-            )
+        env = build_evaluation_env(
+            learner_deck, opponent_deck, opponent_model_path, learner_perspective
+        )
             
         learner_model = load_bot(learner_model_path, env=env)
         model_space = getattr(learner_model, "observation_space", None)

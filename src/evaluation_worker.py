@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 import re
 import subprocess
@@ -18,6 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 def create_result_file(bot_id: str) -> Path:
     """Return a unique, stable destination for one evaluation run."""
     safe_bot_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", bot_id).strip("._") or "bot"
+    if len(safe_bot_id) > 80:
+        digest = hashlib.sha256(bot_id.encode("utf-8")).hexdigest()[:12]
+        candidate_count = len([value for value in bot_id.split(",") if value])
+        safe_bot_id = (
+            f"batch_{candidate_count}_candidates_{digest}"
+            if candidate_count > 1
+            else f"{safe_bot_id[:60]}_{digest}"
+        )
     run_id = f"{utc_now().replace(':', '').replace('+', '_')}_{uuid.uuid4().hex[:8]}"
     return ROOT / "arena_data" / "evaluation_results" / f"{safe_bot_id}_{run_id}.json"
 

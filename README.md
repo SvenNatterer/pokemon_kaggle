@@ -136,10 +136,18 @@ PYTHONPATH=. venv/bin/python scripts/build_validation_manifest.py \
   --exclude-deck bank_37 --exclude-deck bank_79 --count 8
 ```
 
-This writes `decks/validation_opponents.json`. Both `src/train.py` and the V5
+This writes `decks/validation_opponents.json` and copies its frozen PPO assets
+to `models/validation/`. Both `src/train.py` and the V5
 curriculum reject an overlap with this file or `decks/holdout_opponents.json`.
 Keep these manifests under version control; changing them changes the meaning
 of every comparison.
+
+The model folders have distinct responsibilities:
+
+- `models/validation/`: frozen opponents for repeatable model selection.
+- `models/holdout/`: final evaluation opponents; never use during selection or training.
+- `models/stage_snapshots/`: candidate checkpoints produced by training.
+- `models/archive-*/`: historical storage only; manifests must not point here.
 
 ### 2. Train with provenance and immutable stage snapshots
 

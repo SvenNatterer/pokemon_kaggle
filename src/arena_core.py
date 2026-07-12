@@ -27,7 +27,6 @@ BOT_HEALTH_FILE = ARENA_DIR / "bot_health.json"
 PARTICIPANT_MANIFEST = ROOT / "decks" / "arena_agents.json"
 SCHEMA_VERSION = 1
 DEFAULT_ELO = 1200.0
-MISSING_HOLDOUT_SCORE = 0.35
 
 
 def utc_now() -> str:
@@ -137,7 +136,7 @@ def _model_tags(path: Path) -> list[str]:
         tags.append("backup")
     if "checkpoint" in path.name.lower() or "_ckpt" in path.name.lower():
         tags.append("historical_checkpoint")
-    if "curriculum_snapshots" in rel:
+    if "curriculum_snapshots" in rel or "stage_snapshots" in rel:
         tags.append("snapshot")
     return tags
 
@@ -210,7 +209,12 @@ def discover_participants() -> list[Participant]:
     """Discover current and legacy bots, excluding the evaluation-only holdout."""
     participants = _manifest_participants()
     seen_ids = {participant.bot_id for participant in participants}
-    roots = [ROOT / "models", ROOT / "models" / "backup", ROOT / "models" / "curriculum_snapshots"]
+    roots = [
+        ROOT / "models",
+        ROOT / "models" / "backup",
+        ROOT / "models" / "curriculum_snapshots",
+        ROOT / "models" / "stage_snapshots",
+    ]
     seen_paths: set[Path] = set()
     for model_root in roots:
         if not model_root.is_dir():
@@ -281,11 +285,15 @@ def wilson_lower_bound(wins: int, losses: int, draws: int, z: float = 1.96) -> f
 
 
 def _normalise_elos(rows: list[dict[str, Any]]) -> dict[str, float]:
-    values = [float(row.get("elo", DEFAULT_ELO)) for row in rows]
-    if not values or max(values) == min(values):
-        return {row["bot_id"]: 0.5 for row in rows}
-    low, high = min(values), max(values)
-    return {row["bot_id"]: (float(row.get("elo", DEFAULT_ELO)) - low) / (high - low) for row in rows}
+    """Map Elo to expected score versus the fixed 1200 baseline.
+
+    Unlike min-max scaling, this value does not change when an unrelated bot is
+    added to or removed from the leaderboard.
+    """
+    return {
+        row["bot_id"]: 1.0 / (1.0 + 10.0 ** ((DEFAULT_ELO - float(row.get("elo", DEFAULT_ELO))) / 400.0))
+        for row in rows
+    }
 
 
 def rank_participants(
@@ -322,16 +330,14 @@ def rank_participants(
         row["holdout_games"] = int((holdout_row or {}).get("games", 0))
         row["holdout_winrate"] = (holdout_row or {}).get("score_rate")
         row["holdout_wilson"] = (holdout_row or {}).get("wilson95_score_lb")
-        holdout_component = float(row["holdout_wilson"]) if row["holdout_wilson"] is not None else MISSING_HOLDOUT_SCORE
         row["ranking_components"] = {
             "arena_wilson": row["arena_wilson"],
             "normalized_elo": row["normalized_elo"],
             "arena_winrate": row["arena_winrate"],
-            "holdout": holdout_component,
         }
         row["ranking_score"] = (
-            0.35 * row["arena_wilson"] + 0.25 * row["normalized_elo"]
-            + 0.15 * row["arena_winrate"] + 0.25 * holdout_component
+            0.50 * row["arena_wilson"] + 0.35 * row["normalized_elo"]
+            + 0.15 * row["arena_winrate"]
         )
     rows.sort(key=lambda row: (row["ranking_score"], row["arena_wilson"], row["elo"]), reverse=True)
     for index, row in enumerate(rows, 1):
