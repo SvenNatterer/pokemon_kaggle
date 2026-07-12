@@ -144,8 +144,10 @@ function renderStatus(data) {
     $('evaluation-bot').innerHTML = ppoBots.map(p => {
         const filename = String(p.model_path || '').split('/').pop();
         const tags = (p.tags || []).length ? ` [${p.tags.join(', ')}]` : '';
-        const unavailable = p.load_status !== 'loadable';
-        const status = unavailable ? ` — NICHT VERFÜGBAR: ${p.load_status}` : '';
+        const unavailable = !['loadable', 'cooldown'].includes(p.load_status);
+        const status = p.load_status === 'cooldown'
+            ? ' — Arena-Cooldown (Validation möglich)'
+            : unavailable ? ` — NICHT VERFÜGBAR: ${p.load_status}` : '';
         const title = [p.model_path, p.load_error].filter(Boolean).join(' — ');
         return `<option value="${escapeHtml(p.bot_id)}" title="${escapeHtml(title)}" ${unavailable ? 'disabled' : ''}>${escapeHtml(p.display_name)} — ${escapeHtml(filename)}${escapeHtml(tags)}${escapeHtml(status)}</option>`;
     }).join('');

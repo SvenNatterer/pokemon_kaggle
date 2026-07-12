@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -54,6 +55,7 @@ def main() -> int:
     progress_file = EVALUATION_FILE
     atomic_write_json(progress_file, {
         "state": "running", "bot_id": args.bot_id, "model_path": args.model,
+        "pid": os.getpid(),
         "opponents": opponent_labels, "games_per_opponent": args.games,
         "planned_games": args.games * len(opponent_labels) * len(args.model), "completed_games": 0,
         "wins": 0, "losses": 0, "draws": 0, "progress": 0.0,

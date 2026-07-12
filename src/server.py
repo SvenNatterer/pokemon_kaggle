@@ -30,6 +30,22 @@ def evaluation_payload():
     """Return evaluation state together with its persisted result and winner."""
     evaluation = read_json(EVALUATION_FILE, {"state": "idle"})
     evaluation = evaluation if isinstance(evaluation, dict) else {"state": "idle"}
+    if evaluation.get("state") == "running":
+        pid = evaluation.get("pid")
+        worker_alive = False
+        if isinstance(pid, int) and pid > 0:
+            try:
+                os.kill(pid, 0)
+                worker_alive = True
+            except (OSError, TypeError, ValueError):
+                pass
+        if not worker_alive:
+            evaluation.update({
+                "state": "error",
+                "error": "Evaluation worker stopped before completing. Start the evaluation again.",
+                "ended_at": utc_now(),
+            })
+            atomic_write_json(EVALUATION_FILE, evaluation)
     for key, target in (("result_file", "results"), ("selection_file", "selection")):
         relative = str(evaluation.get(key) or "").replace("\\", "/")
         if relative.startswith("arena_data/evaluation_results/"):
@@ -319,8 +335,13 @@ def start_evaluation():
         return jsonify({"success": False, "message": f"Missing {mode} manifest: {holdout_file}"}), 400
     participants = {item.bot_id: item for item in discover_participants()}
     selected = [participants.get(bot_id) for bot_id in bot_ids]
-    if not selected or any(item is None or not item.enabled or item.load_status != "loadable" or item.bot_type != "ppo" or not item.model_path for item in selected):
-        return jsonify({"success": False, "message": "Select one or more enabled, loadable PPO bots."}), 400
+    validation_statuses = {"loadable", "cooldown"}
+    if not selected or any(
+        item is None or not item.enabled or item.load_status not in validation_statuses
+        or item.bot_type != "ppo" or not item.model_path
+        for item in selected
+    ):
+        return jsonify({"success": False, "message": "Select one or more enabled PPO bots with a valid model archive."}), 400
     bot_id = ",".join(bot_ids)
     if arena_controller.status().get("state") == "running":
         arena_controller.pause()
@@ -332,6 +353,7 @@ def start_evaluation():
              "--games", str(games), "--holdout-file", holdout_file,
              *sum((["--model", item.model_path] for item in selected), [])],
             cwd=BASE_DIR, stdout=evaluation_log, stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
     finally:
         evaluation_log.close()

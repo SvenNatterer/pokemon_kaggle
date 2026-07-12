@@ -46,6 +46,16 @@ class ServerApiTests(unittest.TestCase):
         self.assertEqual(payload["results"], [{"candidate": "a"}])
         self.assertEqual(payload["selection"], {"candidate": "a"})
 
+    def test_evaluation_payload_marks_missing_worker_as_error(self):
+        state = {"state": "running", "pid": 99999999}
+        with mock.patch.object(server, "read_json", return_value=state), mock.patch.object(
+            server, "atomic_write_json"
+        ) as write:
+            payload = server.evaluation_payload()
+        self.assertEqual(payload["state"], "error")
+        self.assertIn("stopped", payload["error"])
+        write.assert_called_once_with(server.EVALUATION_FILE, payload)
+
     def test_factory_reset_requires_exact_confirmation(self):
         response = self.client.post("/api/reset", json={"confirmation": "yes"})
         self.assertEqual(response.status_code, 400)
@@ -63,6 +73,21 @@ class ServerApiTests(unittest.TestCase):
         with mock.patch.object(server, "discover_participants", return_value=[rule]):
             response = self.client.post("/api/evaluation/start", json={"bot_id": "rule", "games": 1})
         self.assertEqual(response.status_code, 400)
+
+    def test_arena_cooldown_does_not_block_validation(self):
+        ppo = Participant(
+            "ppo", "PPO", "ppo", "decks/deck_1.csv", "models/ppo_deck_1.zip",
+            load_status="cooldown",
+        )
+        with mock.patch.object(server, "discover_participants", return_value=[ppo]), mock.patch.object(
+            server.arena_controller, "status", return_value={"state": "paused"}
+        ), mock.patch.object(server.subprocess, "Popen", return_value=FakeProcess()) as popen:
+            response = self.client.post(
+                "/api/evaluation/start",
+                json={"bot_id": "ppo", "games": 1, "mode": "validation"},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(popen.call_args.kwargs.get("start_new_session", False))
 
     def test_evaluation_start_does_not_write_arena_matches(self):
         ppo = Participant("ppo", "PPO", "ppo", "decks/deck_1.csv", "models/ppo_deck_1.zip", load_status="loadable")

@@ -222,6 +222,12 @@ the dashboard stores the detailed result and its selected winner. **Promote
 champion** applies the Wilson-improvement and perspective-bias gates. A crowned
 row in the arena leaderboard is the current champion.
 
+An arena cooldown does not block validation or final-holdout evaluation. A PPO
+model in cooldown remains selectable because the cooldown only prevents the
+arena worker from scheduling it temporarily. Disabled participants, missing or
+invalid model archives, and other load failures remain unavailable for
+evaluation.
+
 Use **Final holdout** only once a validation winner has been promoted. Arena
 matches continue independently throughout: they are for regression alerts and
 replays, not automatic champion selection.
