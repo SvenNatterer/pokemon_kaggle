@@ -3,10 +3,10 @@ import os
 import re
 
 
-MODEL_PREFIXES = ("ppo_v5b_deck", "ppo_v5_deck", "ppo_belief_deck", "ppo_v4_deck", "ppo_deck")
+MODEL_PREFIXES = ("ppo_v6_deck", "ppo_v5b_deck", "ppo_v5_deck", "ppo_belief_deck", "ppo_v4_deck", "ppo_deck")
 DEFAULT_MODEL_PREFIX = "ppo_v5_deck"
 MODEL_FILE_RE = re.compile(
-    r"^(?P<prefix>ppo(?:_belief|_v4|_v5b?)?_deck)_(?P<deck_id>(?:bank_)?\d+)"
+    r"^(?P<prefix>ppo(?:_belief|_v4|_v5b?|_v6)?_deck)_(?P<deck_id>(?:bank_)?\d+)"
     r"(?P<variant>_.*)?\.zip$"
 )
 

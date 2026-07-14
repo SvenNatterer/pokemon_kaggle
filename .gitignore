@@ -17,6 +17,7 @@ models/
 
 # Kaggle Dataset
 pokemon-tcg-ai-battle/
+kaggle_bundle/
 
 # OS generated files
 .DS_Store

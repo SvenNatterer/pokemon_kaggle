@@ -89,6 +89,21 @@ def status():
         row["is_champion"] = row["bot_id"] == champion_id
     evaluation = evaluation_payload()
     arena = arena_controller.status()
+    pairwise_results = {}
+    for match in matches:
+        bot_a, bot_b = match.get("bot_a"), match.get("bot_b")
+        if not bot_a or not bot_b or match.get("error_status"):
+            continue
+        first, second = sorted((str(bot_a), str(bot_b)))
+        key = f"{first}\u0000{second}"
+        result = pairwise_results.setdefault(key, {
+            "bot_a": first, "bot_b": second, "wins_a": 0, "wins_b": 0, "draws": 0,
+        })
+        wins_first = match.get("wins_a", 0) if str(bot_a) == first else match.get("wins_b", 0)
+        wins_second = match.get("wins_b", 0) if str(bot_b) == second else match.get("wins_a", 0)
+        result["wins_a"] += int(wins_first)
+        result["wins_b"] += int(wins_second)
+        result["draws"] += int(match.get("draws", 0))
     return jsonify({
         "arena": arena,
         "state": arena.get("state"),
@@ -97,6 +112,7 @@ def status():
         "participants": [participant.to_dict() for participant in participants],
         "current_match": arena.get("current_match"),
         "recent_matches": matches[-20:][::-1],
+        "pairwise_results": list(pairwise_results.values()),
         "evaluation": evaluation,
         "champion": champion,
         "errors": [participant.to_dict() for participant in participants if participant.load_status != "loadable"],

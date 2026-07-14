@@ -343,8 +343,20 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
     preserve per-Pokemon attachments and encode each legal option with shared
     weights.
     """
-    def __init__(self, observation_space: gym.spaces.Dict, features_dim: int = 256):
+    def __init__(
+        self,
+        observation_space: gym.spaces.Dict,
+        features_dim: int = 256,
+        feature_variant: str = "full",
+        use_card_table: bool = False,
+    ):
         super().__init__(observation_space, features_dim)
+        if feature_variant not in {"full", "balanced", "compact", "compact_no_legacy"}:
+            raise ValueError(f"Unknown feature variant: {feature_variant}")
+        self.feature_variant = feature_variant
+        # Experimental, opt-in path used by the card-table benchmark. Keeping
+        # this disabled preserves existing checkpoint behaviour and timings.
+        self.use_card_table = bool(use_card_table)
         
         vector_dim = observation_space.spaces['vector'].shape[0]
         required_v2_keys = {
@@ -379,6 +391,9 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         self.register_buffer("card_name_tokens", torch.as_tensor(relations[3]))
         self.register_buffer("card_evolves_from_tokens", torch.as_tensor(relations[4]))
         self.evolution_embedding = nn.Embedding(relations[5] + 1, EVOLUTION_EMBED_DIM, padding_idx=0)
+        # Inference-only cache. It is excluded from checkpoints and rebuilt
+        # from the current weights after switching back to eval mode.
+        self.register_buffer("_frozen_card_table", None, persistent=False)
 
         keep_mask = np.ones(vector_dim, dtype=np.float32)
         keep_mask[300:650] = 0.0
@@ -388,17 +403,29 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             keep_mask[base + 6] = 0.0  # attack ID
         self.register_buffer("vector_keep_mask", torch.as_tensor(keep_mask))
 
-        self.vector_encoder = nn.Sequential(
-            nn.LayerNorm(vector_dim),
-            nn.Linear(vector_dim, 384),
-            nn.ReLU(),
-            nn.Linear(384, 256),
-            nn.ReLU(),
-        )
-        card_repr_dim = (
+        vector_output_dim = 0
+        if self.feature_variant != "compact_no_legacy":
+            self.vector_encoder = nn.Sequential(
+                nn.LayerNorm(vector_dim),
+                nn.Linear(vector_dim, 384),
+                nn.ReLU(),
+                nn.Linear(384, 256),
+                nn.ReLU(),
+            )
+            vector_output_dim = 256
+        raw_card_repr_dim = (
             CARD_EMBED_DIM + CARD_METADATA_DIM + ATTACK_EMBED_DIM + ATTACK_METADATA_DIM
             + EFFECT_METADATA_DIM + 2 * EVOLUTION_EMBED_DIM
         )
+        if self.feature_variant == "full":
+            card_repr_dim = raw_card_repr_dim
+        else:
+            card_repr_dim = 192 if self.feature_variant == "balanced" else 96
+            self.card_bottleneck = nn.Sequential(
+                nn.Linear(raw_card_repr_dim, card_repr_dim),
+                nn.ReLU(),
+            )
+        self.card_repr_dim = card_repr_dim
         entity_input_dim = card_repr_dim * 4 + ENTITY_FEATURE_DIM
         self.entity_encoder = nn.Sequential(
             nn.Linear(entity_input_dim, 128),
@@ -419,7 +446,7 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         # Mean/max/sum/count pooling preserves multiplicity without depending on order.
         pooled_card_dim = card_repr_dim * 3 + 1
         combined_dim = (
-            256
+            vector_output_dim
             + ENTITY_SLOTS * 64
             + pooled_card_dim
             + 2 * pooled_card_dim
@@ -440,7 +467,7 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
     def _ids(self, values, maximum):
         return values.long().clamp_(0, maximum)
 
-    def _card_repr(self, card_ids):
+    def _raw_card_repr(self, card_ids):
         card_ids = self._ids(card_ids, MAX_CARD_ID)
         attack_ids = self.card_attack_ids[card_ids]
         attack_mask = (attack_ids > 0).unsqueeze(-1)
@@ -460,18 +487,52 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             ], dim=-1
         )
 
+    def _card_repr(self, card_ids):
+        representation = self._raw_card_repr(card_ids)
+        if self.feature_variant == "full":
+            return representation
+        return self.card_bottleneck(representation)
+
+    def _build_card_table(self):
+        card_ids = torch.arange(
+            MAX_CARD_ID + 1,
+            dtype=torch.long,
+            device=self.card_embedding.weight.device,
+        )
+        return self._card_repr(card_ids)
+
+    def _card_table_for_forward(self):
+        if not self.use_card_table:
+            return None
+        if self.training or torch.is_grad_enabled():
+            return self._build_card_table()
+        if self._frozen_card_table is None:
+            self._frozen_card_table = self._build_card_table().detach()
+        return self._frozen_card_table
+
+    def train(self, mode: bool = True):
+        if mode and hasattr(self, "_frozen_card_table"):
+            self._frozen_card_table = None
+        return super().train(mode)
+
+    def _lookup_card_repr(self, card_ids, card_table=None):
+        card_ids = self._ids(card_ids, MAX_CARD_ID)
+        if card_table is None:
+            return self._card_repr(card_ids)
+        return card_table[card_ids]
+
     @staticmethod
     def _masked_mean(values, ids):
         mask = (ids > 0).unsqueeze(-1).to(values.dtype)
         return (values * mask).sum(dim=-2) / mask.sum(dim=-2).clamp_min(1.0)
 
-    def _mean_card_set(self, card_ids):
+    def _mean_card_set(self, card_ids, card_table=None):
         ids = self._ids(card_ids, MAX_CARD_ID)
-        return self._masked_mean(self._card_repr(ids), ids)
+        return self._masked_mean(self._lookup_card_repr(ids, card_table), ids)
 
-    def _pool_card_set(self, card_ids):
+    def _pool_card_set(self, card_ids, card_table=None):
         ids = self._ids(card_ids, MAX_CARD_ID)
-        values = self._card_repr(ids)
+        values = self._lookup_card_repr(ids, card_table)
         mean = self._masked_mean(values, ids)
         mask = (ids > 0).unsqueeze(-1)
         maximum = values.masked_fill(~mask, -1e9).max(dim=-2).values
@@ -482,7 +543,7 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         normalized_count = torch.log1p(count) / np.log(121.0)
         return torch.cat([mean, maximum, summed, normalized_count], dim=-1)
 
-    def encode_options(self, observations):
+    def encode_options(self, observations, card_table=None):
         card_ids = self._ids(observations["option_card_ids"], MAX_CARD_ID)
         attack_ids = self._ids(observations["option_attack_ids"], MAX_ATTACK_ID)
         option_types = self._ids(observations["option_types"], 17)
@@ -490,7 +551,7 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         return self.option_encoder(
             torch.cat(
                 [
-                    self._card_repr(card_ids),
+                    self._lookup_card_repr(card_ids, card_table),
                     self.attack_embedding(attack_ids),
                     self.attack_metadata[attack_ids],
                     self.option_type_embedding(option_types),
@@ -505,14 +566,21 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         if not self.structured_v2:
             return self.net(observations['vector'])
 
-        vector = observations["vector"].float() * self.vector_keep_mask
-        vector_features = self.vector_encoder(vector)
+        card_table = self._card_table_for_forward()
+        combined_features = []
+        if self.feature_variant != "compact_no_legacy":
+            vector = observations["vector"].float() * self.vector_keep_mask
+            combined_features.append(self.vector_encoder(vector))
 
         entity_ids = self._ids(observations["entity_ids"], MAX_CARD_ID)
-        entity_card_repr = self._card_repr(entity_ids)
-        tool_repr = self._card_repr(observations["entity_tool_ids"])
-        pre_evolution_repr = self._mean_card_set(observations["entity_pre_evolution_ids"])
-        energy_card_repr = self._mean_card_set(observations["entity_energy_card_ids"])
+        entity_card_repr = self._lookup_card_repr(entity_ids, card_table)
+        tool_repr = self._lookup_card_repr(observations["entity_tool_ids"], card_table)
+        pre_evolution_repr = self._mean_card_set(
+            observations["entity_pre_evolution_ids"], card_table
+        )
+        energy_card_repr = self._mean_card_set(
+            observations["entity_energy_card_ids"], card_table
+        )
         entities = self.entity_encoder(
             torch.cat(
                 [
@@ -526,20 +594,22 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             )
         ).flatten(start_dim=-2)
 
-        hand = self._pool_card_set(observations["hand_ids"])
+        hand = self._pool_card_set(observations["hand_ids"], card_table)
         discard_ids = observations["discard_ids"]
-        our_discard = self._pool_card_set(discard_ids[..., 0, :])
-        opponent_discard = self._pool_card_set(discard_ids[..., 1, :])
+        our_discard = self._pool_card_set(discard_ids[..., 0, :], card_table)
+        opponent_discard = self._pool_card_set(discard_ids[..., 1, :], card_table)
         prize_ids = observations["prize_ids"]
-        our_prizes = self._pool_card_set(prize_ids[..., 0, :])
-        opponent_prizes = self._pool_card_set(prize_ids[..., 1, :])
-        search = self._pool_card_set(observations["search_ids"])
-        looking = self._pool_card_set(observations["looking_ids"])
-        own_deck = self._pool_card_set(observations["own_deck_ids"])
-        logs = self._pool_card_set(observations["log_card_ids"])
-        context = self._card_repr(observations["context_card_ids"]).flatten(start_dim=-2)
+        our_prizes = self._pool_card_set(prize_ids[..., 0, :], card_table)
+        opponent_prizes = self._pool_card_set(prize_ids[..., 1, :], card_table)
+        search = self._pool_card_set(observations["search_ids"], card_table)
+        looking = self._pool_card_set(observations["looking_ids"], card_table)
+        own_deck = self._pool_card_set(observations["own_deck_ids"], card_table)
+        logs = self._pool_card_set(observations["log_card_ids"], card_table)
+        context = self._lookup_card_repr(
+            observations["context_card_ids"], card_table
+        ).flatten(start_dim=-2)
 
-        options = self.encode_options(observations)
+        options = self.encode_options(observations, card_table)
         option_present = observations["action_mask"][..., :MAX_ENCODED_OPTIONS] > 0
         option_mean = self._masked_mean(options, option_present.long())
         option_max = options.masked_fill(~option_present.unsqueeze(-1), -1e9).max(dim=-2).values
@@ -547,10 +617,8 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             option_present.any(dim=-1, keepdim=True), option_max, torch.zeros_like(option_max)
         )
 
-        return self.net(
-            torch.cat(
+        combined_features.extend(
                 [
-                    vector_features,
                     entities,
                     hand,
                     our_discard,
@@ -564,10 +632,9 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
                     context,
                     option_mean,
                     option_max,
-                ],
-                dim=-1,
-            )
+                ]
         )
+        return self.net(torch.cat(combined_features, dim=-1))
 
 class PokemonTCGNetwork(nn.Module):
     """

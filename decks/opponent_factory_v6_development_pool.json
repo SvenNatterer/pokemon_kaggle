@@ -1,0 +1,38 @@
+[
+  {
+    "label": "Alakazam historical PPO",
+    "deck": "decks/deck_bank/bank_47.csv",
+    "model": "models/ppo_v4_deck_bank_47.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "Zoroark historical PPO",
+    "deck": "decks/deck_bank/bank_19.csv",
+    "model": "models/archive-12-07-26/ppo_v4_deck_bank_19.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "Metagross historical PPO",
+    "deck": "decks/deck_bank/bank_79.csv",
+    "model": "models/archive-12-07-26/ppo_v4_deck_bank_79.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "Honchkrow historical PPO",
+    "deck": "decks/deck_bank/bank_86.csv",
+    "model": "models/archive-12-07-26/ppo_v4_deck_bank_37_opp_stage2.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "Trevenant heuristic anchor",
+    "deck": "decks/deck_bank/bank_33.csv",
+    "model": "heuristic",
+    "weight": 0.5
+  },
+  {
+    "label": "Mewtwo heuristic anchor",
+    "deck": "decks/deck_bank/bank_38.csv",
+    "model": "heuristic",
+    "weight": 0.5
+  }
+]

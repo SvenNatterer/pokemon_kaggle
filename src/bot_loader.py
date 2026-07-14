@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+import os
+
 from src.agents.rule_based_agent import (
     RuleBasedPokemonAgent,
     is_rule_based_model_spec,
     rule_based_profile_from_spec,
 )
 from src.model_paths import strip_zip_suffix
+
+
+def _resolve_load_path(model_path: str) -> str:
+    """Prefer an explicit archive over a same-named extracted directory."""
+    if os.path.isfile(model_path):
+        return model_path
+    return strip_zip_suffix(model_path)
 
 
 def _load_legacy_structured_model(loader, path):
@@ -31,7 +40,7 @@ def load_bot(model_path: str | None, env=None):
     from stable_baselines3 import PPO
     from src.custom_ppo import CustomPPO
 
-    path = strip_zip_suffix(model_path)
+    path = _resolve_load_path(model_path)
     errors = []
     for loader in (CustomPPO, PPO):
         attempts = ({"env": env}, {}) if env is not None else ({},)

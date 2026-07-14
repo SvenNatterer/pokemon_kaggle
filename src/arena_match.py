@@ -24,7 +24,7 @@ from src.arena_core import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REPLAY_INTERVAL = 15
+REPLAY_INTERVAL = 5
 WATCHED_FILE = ROOT / "decks" / "watched_models.json"
 
 

@@ -6,20 +6,34 @@ import numpy as np
 # Add src to pythonpath so imports work
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.env_wrapper import PokemonTCGEnv, _fit_observation_to_model_space
+from src.env_wrapper import LEGACY_ACTION_SPACE_SIZE, PokemonTCGEnv, _fit_observation_to_model_space
 from src.custom_ppo import CustomPPO
 from src.model_paths import discover_deck_models, resolve_deck_model_path, strip_zip_suffix
 from src.bot_loader import load_bot
 
 
-def build_evaluation_env(learner_deck, opponent_deck, opponent_model_path, learner_perspective):
+def model_action_space_size(model):
+    size = int(getattr(getattr(model, "action_space", None), "n", LEGACY_ACTION_SPACE_SIZE))
+    return size
+
+
+def build_evaluation_env(
+    learner_deck,
+    opponent_deck,
+    opponent_model_path,
+    learner_perspective,
+    action_space_size=LEGACY_ACTION_SPACE_SIZE,
+):
     """Keep deck ownership stable; the environment places decks by perspective."""
-    return PokemonTCGEnv(
+    kwargs = dict(
         my_deck=learner_deck,
         opponent_deck=opponent_deck,
         opponent_model_path=opponent_model_path,
         learner_perspective=learner_perspective,
     )
+    if action_space_size != LEGACY_ACTION_SPACE_SIZE:
+        kwargs["action_space_size"] = action_space_size
+    return PokemonTCGEnv(**kwargs)
 
 def read_deck(deck_path):
     df = pd.read_csv(deck_path, header=None)
@@ -43,8 +57,8 @@ def simulate_match(model1_path, deck1_path, model2_path, deck2_path, num_games=1
 
 def evaluate_vs_baseline(model_path, deck_path, num_games=10):
     deck = read_deck(deck_path)
-    env = PokemonTCGEnv(deck, deck)
-    model = load_bot(model_path, env=env)
+    model = load_bot(model_path)
+    env = PokemonTCGEnv(deck, deck, action_space_size=model_action_space_size(model))
     
     wins = 0
     for i in range(num_games):
@@ -109,11 +123,14 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
         nonlocal prize_wins_2, deckout_wins_2, benchout_wins_2
         nonlocal total_turns
 
+        learner_model = load_bot(learner_model_path)
         env = build_evaluation_env(
-            learner_deck, opponent_deck, opponent_model_path, learner_perspective
+            learner_deck,
+            opponent_deck,
+            opponent_model_path,
+            learner_perspective,
+            model_action_space_size(learner_model),
         )
-            
-        learner_model = load_bot(learner_model_path, env=env)
         model_space = getattr(learner_model, "observation_space", None)
 
         try:

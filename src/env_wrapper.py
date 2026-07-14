@@ -5,14 +5,18 @@ import os
 
 from src.cg.game import battle_start, battle_select, battle_finish
 from src.cg.api import AreaType, OptionType, SelectContext, to_observation_class, Observation, all_card_data, all_attack, CardType, LogType
-from src.agents.rule_based_agent import RuleBasedPokemonAgent, is_rule_based_model_spec, rule_based_profile_from_spec
-from src.model_paths import strip_zip_suffix
 
 RESULT_REASON_PRIZE = 1
 RESULT_REASON_DECK_OUT = 2
 RESULT_REASON_BENCH_OUT = 3
-STOP_ACTION = 999
 MAX_ENCODED_OPTIONS = 65
+V6_ACTION_SPACE_SIZE = MAX_ENCODED_OPTIONS + 1
+V6_STOP_ACTION = MAX_ENCODED_OPTIONS
+LEGACY_ACTION_SPACE_SIZE = 1000
+LEGACY_STOP_ACTION = LEGACY_ACTION_SPACE_SIZE - 1
+# Backwards-compatible import for legacy callers. New code should use the
+# environment's ``stop_action`` because V6 uses 65 instead of 999.
+STOP_ACTION = LEGACY_STOP_ACTION
 MAX_CARD_ID = 1999
 MAX_ATTACK_ID = 1999
 ENTITY_SLOTS = 12
@@ -190,10 +194,19 @@ class PokemonTCGEnv(gym.Env):
         opponent_pool=None,
         learner_perspective=0,
         rotate_perspective=False,
+        action_space_size=LEGACY_ACTION_SPACE_SIZE,
     ):
         super().__init__()
         self.learner_perspective = learner_perspective
         self.rotate_perspective = rotate_perspective
+        if action_space_size not in {LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE}:
+            raise ValueError(
+                f"Unsupported action space size {action_space_size}; expected "
+                f"{V6_ACTION_SPACE_SIZE} (V6) or {LEGACY_ACTION_SPACE_SIZE} (legacy)"
+            )
+        self.max_options = int(action_space_size)
+        self.stop_action = self.max_options - 1
+        self.policy_version = "v6" if self.max_options == V6_ACTION_SPACE_SIZE else "v5"
         self.my_deck = my_deck
         self.opponent_deck = opponent_deck
         self.opponent_model_path = opponent_model_path
@@ -204,6 +217,8 @@ class PokemonTCGEnv(gym.Env):
         self.opponent_episode_start = True
         self.pending_selection = []
         self.opponent_pending_selection = []
+        self.max_option_count_seen = 0
+        self.option_overflow_count = 0
         self.sparse_rewards = sparse_rewards
         self.reward_config = DEFAULT_REWARD_CONFIG.copy()
         if reward_config:
@@ -255,7 +270,6 @@ class PokemonTCGEnv(gym.Env):
             self.pokemon_attack_costs = {}
         
         # Action space: a discrete selection of an option from the available ones.
-        self.max_options = STOP_ACTION + 1
         self.action_space = spaces.Discrete(self.max_options)
         
         # Observation V2 keeps the legacy vector for old opponent checkpoints,
@@ -331,7 +345,7 @@ class PokemonTCGEnv(gym.Env):
             "step_penalty", "invalid_action", "attack_bonus", "end_turn",
             "prize_win", "bench_out_win", "deck_out_win", "loss", "deck_out_penalty",
             "prize_taken", "prize_lost", "deck_shrink", "damage_taken", "damage_dealt",
-            "energy_active_useful", "energy_active_useless", "energy_bench",
+            "energy_active_useful", "energy_active_useless",
             "switch_penalty", "time_penalty"
         ]
         self.current_obs_dict = None
@@ -397,26 +411,10 @@ class PokemonTCGEnv(gym.Env):
             if cached_model is not None:
                 self.opponent_model = cached_model
         if self.opponent_model_path is not None and self.opponent_model is None:
-            if is_rule_based_model_spec(self.opponent_model_path):
-                self.opponent_model = RuleBasedPokemonAgent(
-                    profile=rule_based_profile_from_spec(self.opponent_model_path)
-                )
-            else:
-                self.opponent_model_path = strip_zip_suffix(self.opponent_model_path)
-                # We import here to avoid circular imports if necessary
-                from stable_baselines3 import PPO
-                try:
-                    from src.custom_ppo import CustomPPO
-                    self.opponent_model = CustomPPO.load(self.opponent_model_path)
-                except Exception as e:
-                    try:
-                        self.opponent_model = PPO.load(self.opponent_model_path)
-                    except Exception as fallback_e:
-                        raise RuntimeError(
-                            f"Failed to load opponent model {self.opponent_model_path}: "
-                            f"CustomPPO={e}; PPO={fallback_e}"
-                        ) from fallback_e
-                self.opponent_model_cache[self.opponent_model_path] = self.opponent_model
+            from src.bot_loader import load_bot
+
+            self.opponent_model = load_bot(self.opponent_model_path)
+            self.opponent_model_cache[self.opponent_model_path] = self.opponent_model
         
         if self.current_obs_dict is not None:
             battle_finish()
@@ -444,13 +442,15 @@ class PokemonTCGEnv(gym.Env):
         old_obs = to_observation_class(self.current_obs_dict)
 
         valid_options = len(old_obs.select.option) if old_obs.select and old_obs.select.option else 0
-        selected, committed, invalid = advance_selection(old_obs, action, self.pending_selection)
+        selected, committed, invalid = advance_selection(
+            old_obs, action, self.pending_selection, stop_action=self.stop_action
+        )
         self.pending_selection = selected
 
         if not committed:
             if invalid:
                 legal_options = [
-                    index for index in range(min(valid_options, STOP_ACTION))
+                    index for index in range(min(valid_options, self.stop_action))
                     if index not in self.pending_selection
                 ]
                 if legal_options:
@@ -462,6 +462,7 @@ class PokemonTCGEnv(gym.Env):
                         old_obs,
                         action,
                         self.pending_selection,
+                        stop_action=self.stop_action,
                     )
                     self.pending_selection = selected
 
@@ -481,7 +482,7 @@ class PokemonTCGEnv(gym.Env):
         if invalid:
             step_reward += self._add_reward("invalid_action", self._reward("INVALID_ACTION"))
 
-        if valid_options > 0 and 0 <= action < valid_options:
+        if valid_options > 0 and 0 <= action < min(valid_options, self.stop_action):
             chosen_option = old_obs.select.option[action]
             if chosen_option.type == getattr(OptionType, 'ATTACK', 11):
                 step_reward += self._add_reward("attack_bonus", self._reward("ATTACK_BONUS"))
@@ -612,9 +613,6 @@ class PokemonTCGEnv(gym.Env):
                 reward += self._add_reward("energy_active_useful", delta_total_energy * self._reward("ENERGY_ATTACHED") * self._reward("ENERGY_ACTIVE_MULT"))
             elif active_attached and not useful_energy_attached:
                 reward += self._add_reward("energy_active_useless", delta_total_energy * self._reward("ENERGY_ATTACHED") * self._reward("ENERGY_USELESS_MULT"))
-            else:
-                # User requested to remove bench attachment reward
-                self._add_reward("energy_bench", 0.0)
             
         # Step Penalty (Time penalty)
         reward += self._add_reward("time_penalty", self._reward("TIME_PENALTY"))
@@ -637,9 +635,17 @@ class PokemonTCGEnv(gym.Env):
                 break
                 
             if self.opponent_model is not None:
+                opponent_action_space = getattr(self.opponent_model, "action_space", None)
+                opponent_action_size = int(
+                    getattr(opponent_action_space, "n", self.max_options)
+                )
+                if opponent_action_size not in {LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE}:
+                    opponent_action_size = self.max_options
+                opponent_stop_action = opponent_action_size - 1
                 opponent_obs = self._get_obs(
                     perspective=1 - self.learner_perspective,
                     pending_selection=self.opponent_pending_selection,
+                    action_space_size=opponent_action_size,
                 )
                 
                 # Expand dims to match what stable-baselines expects
@@ -661,13 +667,14 @@ class PokemonTCGEnv(gym.Env):
                 action = int(np.asarray(action).item())
 
             else:
+                opponent_stop_action = self.stop_action
                 fallback_obs = self._get_obs(
                     perspective=1 - self.learner_perspective,
                     pending_selection=self.opponent_pending_selection,
                 )
                 legal_actions = np.flatnonzero(fallback_obs["action_mask"])
                 if len(legal_actions) == 0:
-                    action = STOP_ACTION
+                    action = opponent_stop_action
                 else:
                     action = int(self.np_random.choice(legal_actions))
 
@@ -675,10 +682,11 @@ class PokemonTCGEnv(gym.Env):
                 obs,
                 action,
                 self.opponent_pending_selection,
+                stop_action=opponent_stop_action,
             )
             if invalid:
                 legal_options = [
-                    index for index in range(min(len(obs.select.option or []), STOP_ACTION))
+                    index for index in range(min(len(obs.select.option or []), opponent_stop_action))
                     if index not in self.opponent_pending_selection
                 ]
                 if legal_options:
@@ -688,6 +696,7 @@ class PokemonTCGEnv(gym.Env):
                         obs,
                         selected_fallback_action,
                         self.opponent_pending_selection,
+                        stop_action=opponent_stop_action,
                     )
                 elif len(self.opponent_pending_selection) >= max(0, obs.select.minCount):
                     selected, committed = list(self.opponent_pending_selection), True
@@ -1072,14 +1081,22 @@ class PokemonTCGEnv(gym.Env):
             "option_features": option_features,
         }
 
-    def _get_obs(self, perspective=0, pending_selection=None):
+    def _get_obs(self, perspective=0, pending_selection=None, action_space_size=None):
         obs = to_observation_class(self.current_obs_dict)
         if pending_selection is None:
             pending_selection = self.pending_selection if perspective == 0 else self.opponent_pending_selection
         pending_selection = list(pending_selection or [])
-        mask = np.zeros(self.max_options, dtype=np.int8)
+        output_size = int(action_space_size or self.max_options)
+        if output_size not in {LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE}:
+            raise ValueError(f"Unsupported observation action-mask size: {output_size}")
+        stop_action = output_size - 1
+        mask = np.zeros(output_size, dtype=np.int8)
         if obs.select and obs.select.option:
-            num_opts = min(len(obs.select.option), STOP_ACTION)
+            raw_option_count = len(obs.select.option)
+            self.max_option_count_seen = max(self.max_option_count_seen, raw_option_count)
+            if raw_option_count > MAX_ENCODED_OPTIONS:
+                self.option_overflow_count += 1
+            num_opts = min(raw_option_count, MAX_ENCODED_OPTIONS, stop_action)
             mask[:num_opts] = 1
             for selected_index in pending_selection:
                 if 0 <= selected_index < num_opts:
@@ -1088,7 +1105,7 @@ class PokemonTCGEnv(gym.Env):
             min_count = min(num_opts, max(0, int(obs.select.minCount or 0)))
             max_count = min(num_opts, max(0, int(obs.select.maxCount or 0)))
             if len(pending_selection) >= min_count and (min_count == 0 or max_count > 1):
-                mask[STOP_ACTION] = 1
+                mask[stop_action] = 1
             
         vec = np.zeros((self.vector_dim,), dtype=np.float32)
         if obs.current is not None:
@@ -1265,7 +1282,7 @@ class PokemonTCGEnv(gym.Env):
 
             # Autoregressive selection state. Existing action/output dimensions stay unchanged.
             vec[1490] = float(len(pending_selection))
-            vec[1491] = float(mask[STOP_ACTION])
+            vec[1491] = float(mask[stop_action])
             for i, selected_index in enumerate(pending_selection[:8]):
                 vec[1492 + i] = float(selected_index + 1)
 
@@ -1326,7 +1343,12 @@ class PokemonTCGEnv(gym.Env):
         return {"vector": vec, "action_mask": mask, "aux_target": aux_target, **structured}
         
     def _get_info(self):
-        info = {}
+        info = {
+            "policy_version": self.policy_version,
+            "action_space_size": self.max_options,
+            "max_option_count_seen": self.max_option_count_seen,
+            "option_overflow_count": self.option_overflow_count,
+        }
         try:
             obs = to_observation_class(self.current_obs_dict)
             if obs and obs.current:

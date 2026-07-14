@@ -10,7 +10,7 @@ import sys
 
 DECK_FILE_RE = re.compile(r"^(?:deck_)?(?P<deck_id>(?:bank_)?\d+)$")
 MODEL_FILE_RE = re.compile(
-    r"^ppo(?:_belief|_v4|_v5)?_deck_(?P<deck_id>(?:bank_)?\d+)(?:_.*)?$"
+    r"^ppo(?:_belief|_v4|_v5b?|_v6)?_deck_(?P<deck_id>(?:bank_)?\d+)(?:_.*)?$"
 )
 
 

@@ -1,0 +1,91 @@
+{
+  "version": 3,
+  "policy_version": "v6",
+  "description": "Four independent compact-action bases; evaluate first, then use the best three for disjoint opponent splits.",
+  "defaults": {
+    "num_envs": 7,
+    "n_steps": 2048,
+    "batch_size": 2048,
+    "n_epochs": 2,
+    "base_steps": 1000000,
+    "finetune_steps": 400000,
+    "learning_rate": 0.0001,
+    "entropy_coefficient": 0.008,
+    "clip_range": 0.12,
+    "target_kl": 0.03,
+    "belief_dim": 64,
+    "base_aux_coefficient": 0.1,
+    "finetune_aux_coefficient": 0.0
+  },
+  "development_pool": "decks/opponent_factory_v6_development_pool.json",
+  "base_evaluation": {
+    "manifest": "decks/validation_opponents.json",
+    "games_per_opponent": 30,
+    "minimum_score_rate": 0.35,
+    "maximum_perspective_gap": 0.20,
+    "minimum_passing_bases": 3,
+    "selected_base_count": 3,
+    "results_file": "logs/opponent_factory_v6/base_evaluation.json",
+    "selection_file": "logs/opponent_factory_v6/base_selection.json"
+  },
+  "bases": [
+    {
+      "id": "base_a",
+      "seed": 20260721,
+      "deck_path": "decks/deck_bank/bank_54.csv",
+      "model_path": "models/foundation/ppo_v6_deck_bank_54_base_a.zip"
+    },
+    {
+      "id": "base_b",
+      "seed": 20260722,
+      "deck_path": "decks/deck_bank/bank_55.csv",
+      "model_path": "models/foundation/ppo_v6_deck_bank_55_base_b.zip"
+    },
+    {
+      "id": "base_c",
+      "seed": 20260723,
+      "deck_path": "decks/deck_bank/bank_56.csv",
+      "model_path": "models/foundation/ppo_v6_deck_bank_56_base_c.zip"
+    },
+    {
+      "id": "base_d",
+      "seed": 20260724,
+      "deck_path": "decks/deck_bank/bank_65.csv",
+      "model_path": "models/foundation/ppo_v6_deck_bank_65_base_d.zip"
+    }
+  ],
+  "fallback_bases": [
+    {
+      "id": "base_e",
+      "seed": 20260725,
+      "deck_path": "decks/deck_bank/bank_62.csv",
+      "model_path": "models/foundation/ppo_v6_deck_bank_62_base_e.zip"
+    },
+    {
+      "id": "base_f",
+      "seed": 20260726,
+      "deck_path": "decks/deck_bank/bank_64.csv",
+      "model_path": "models/foundation/ppo_v6_deck_bank_64_base_f.zip"
+    }
+  ],
+  "targets": [
+    {"deck_id": "bank_33", "archetype": "Hop's Trevenant", "split": "training"},
+    {"deck_id": "bank_38", "archetype": "Team Rocket's Mewtwo ex", "split": "training"},
+    {"deck_id": "bank_49", "archetype": "Hydrapple ex", "split": "training"},
+    {"deck_id": "bank_61", "archetype": "Haxorus", "split": "training"},
+
+    {"deck_id": "bank_11", "archetype": "N's Zoroark ex", "split": "validation"},
+    {"deck_id": "bank_25", "archetype": "Espeon ex", "split": "validation"},
+    {"deck_id": "bank_36", "archetype": "Rillaboom", "split": "validation"},
+    {"deck_id": "bank_57", "archetype": "Team Rocket's Honchkrow", "split": "validation"},
+    {"deck_id": "bank_84", "archetype": "Mega Lopunny ex", "split": "validation"},
+    {"deck_id": "bank_2", "archetype": "Metagross", "split": "validation"},
+
+    {"deck_id": "bank_99", "archetype": "Arboliva ex", "split": "holdout"},
+    {"deck_id": "bank_3", "archetype": "Dragapult ex", "split": "holdout"},
+    {"deck_id": "bank_14", "archetype": "Alakazam", "split": "holdout"},
+    {"deck_id": "bank_24", "archetype": "Mega Kangaskhan ex", "split": "holdout"},
+    {"deck_id": "bank_63", "archetype": "Hop's Trevenant", "split": "holdout"},
+    {"deck_id": "bank_70", "archetype": "Hydrapple ex", "split": "holdout"}
+  ]
+}

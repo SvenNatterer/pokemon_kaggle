@@ -35,6 +35,7 @@
             </section>
             <section class="card leaderboard-card">
                 <h2>🏆 Global Leaderboard</h2>
+                <p class="subtitle">Ranking Score = 50% * Wilson (95% Lower Bound) + 35% * Normierte Elo + 15% * Arena (Win-Rate)</p>
                 <div class="table-container">
                     <table id="leaderboard-table">
                         <thead>
@@ -49,6 +50,11 @@
                         </tbody>
                     </table>
                 </div>
+            </section>
+            <section class="card matchup-card">
+                <h2>⚔️ Teilnehmer-Matrix</h2>
+                <p class="subtitle">Erfolgsquote des Teilnehmers in der Zeile gegen den Teilnehmer in der Spalte. Unentschieden zählen zur Hälfte.</p>
+                <div id="matchup-matrix" class="matchup-matrix-wrap"><span class="muted-line">Noch keine Arena-Ergebnisse.</span></div>
             </section>
             <section class="card">
                 <div class="section-head"><div><h2>🧪 Evaluation & Champion</h2><p class="subtitle">1) candidates select  2) validation run  3) champion promote  4) final holdout only at the end.</p></div></div>
@@ -85,7 +91,7 @@
                         <!-- HERoz launcher removed -->
                     </div>
                 </div>
-                <p class="subtitle">Ein aktiviertes Auge erzeugt automatisch bei jedem 15. Arena-Match dieses Bots ein Replay. Ohne Auswahl werden keine neuen Arena-Replays erzeugt.</p>
+                <p class="subtitle">Ein aktiviertes Auge erzeugt automatisch bei jedem 5. Arena-Match dieses Bots ein Replay. Ohne Auswahl werden keine neuen Arena-Replays erzeugt.</p>
                 <div id="replay-status" class="muted-line">Loading replays...</div>
                 <div id="replay-list" class="replay-list"></div>
             </section>

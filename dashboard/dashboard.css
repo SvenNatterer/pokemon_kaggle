@@ -205,6 +205,18 @@ td:last-child {
     font-weight: 400;
 }
 
+.matchup-matrix-wrap { max-width: 100%; overflow-x: auto; }
+.matchup-matrix { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 3px; }
+.matchup-matrix th { max-width: 150px; padding: 0.7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: none; letter-spacing: normal; }
+.matchup-matrix tbody th { position: sticky; left: 0; z-index: 1; background: #111827; color: var(--text-main); text-align: left; }
+.matchup-matrix td { min-width: 92px; padding: 0.65rem; border-radius: 6px; text-align: center; }
+.matchup-matrix tbody tr:hover { transform: none; }
+.matchup-result { background: hsl(var(--matchup-hue) 55% 24% / 0.85); }
+.matchup-result strong, .matchup-result small { display: block; }
+.matchup-result small { margin-top: 0.15rem; color: rgba(255,255,255,0.7); }
+.matchup-self { background: rgba(255,255,255,0.025); color: var(--text-muted); }
+.matchup-empty { background: rgba(255,255,255,0.015); color: var(--text-muted); }
+
 @keyframes fadeInDown {
     from { opacity: 0; transform: translateY(-20px); }
     to { opacity: 1; transform: translateY(0); }

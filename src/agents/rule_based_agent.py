@@ -121,6 +121,7 @@ class ParsedState:
     max_count: int
     pending_count: int
     stop_legal: bool
+    stop_action: int
     entity_features: np.ndarray
     entity_ids: np.ndarray
     hand_ids: np.ndarray
@@ -145,6 +146,7 @@ class OptionRecord:
     card_id: int
     attack_id: int
     features: np.ndarray
+    stop: bool = False
 
     @property
     def type_name(self) -> str:
@@ -156,7 +158,7 @@ class OptionRecord:
 
     @property
     def is_stop_action(self) -> bool:
-        return self.index == STOP_ACTION
+        return self.stop
 
     @property
     def is_padding(self) -> bool:
@@ -221,6 +223,7 @@ class PokemonObservationAdapter:
     def parse(self, observation: dict[str, Any]) -> tuple[ParsedState, list[OptionRecord]]:
         vector = self._as_vector(observation.get("vector"))
         action_mask = self._as_vector(observation.get("action_mask"), dtype=np.int8)
+        stop_action = max(0, len(action_mask) - 1)
         option_types = self._as_vector(observation.get("option_types"), dtype=np.int32)
         option_areas = self._as_vector(observation.get("option_areas"), dtype=np.int32)
         option_card_ids = self._as_vector(observation.get("option_card_ids"), dtype=np.int32)
@@ -244,6 +247,7 @@ class PokemonObservationAdapter:
             max_count=int(vector[VECTOR_SELECT_MAX_COUNT_INDEX]) if vector.size > VECTOR_SELECT_MAX_COUNT_INDEX else 0,
             pending_count=int(vector[VECTOR_PENDING_COUNT_INDEX]) if vector.size > VECTOR_PENDING_COUNT_INDEX else 0,
             stop_legal=bool(vector[VECTOR_STOP_LEGAL_INDEX]) if vector.size > VECTOR_STOP_LEGAL_INDEX else False,
+            stop_action=stop_action,
             entity_features=entity_features,
             entity_ids=entity_ids,
             hand_ids=hand_ids,
@@ -254,15 +258,16 @@ class PokemonObservationAdapter:
 
         options: list[OptionRecord] = []
         for index in self._legal_indices(action_mask):
-            if index == STOP_ACTION:
+            if index == stop_action:
                 options.append(
                     OptionRecord(
-                        index=STOP_ACTION,
+                        index=stop_action,
                         option_type=-1,
                         option_area=0,
                         card_id=0,
                         attack_id=0,
                         features=np.zeros(8, dtype=np.float32),
+                        stop=True,
                     )
                 )
                 continue
@@ -343,12 +348,12 @@ class RuleBasedPokemonAgent:
         if not options:
             decision = {
                 "phase": parsed_state.phase,
-                "selected": STOP_ACTION,
+                "selected": parsed_state.stop_action,
                 "selected_reason": {"fallback": 0.0},
                 "candidates": [],
             }
             self.last_decision = decision
-            return (STOP_ACTION, decision) if return_info else STOP_ACTION
+            return (parsed_state.stop_action, decision) if return_info else parsed_state.stop_action
 
         scored_options = [self._score_option(parsed_state, option) for option in options]
         selected = self._select_option(parsed_state, options, scored_options)
@@ -362,7 +367,7 @@ class RuleBasedPokemonAgent:
                     "index": item.index,
                     "score": item.score,
                     "reason": item.reason,
-                    "type": "STOP" if item.index == STOP_ACTION else _enum_name(self._option_type(options, item.index), OptionType),
+                    "type": "STOP" if item.index == parsed_state.stop_action else _enum_name(self._option_type(options, item.index), OptionType),
                 }
                 for item in sorted(scored_options, key=lambda item: (item.score, -item.index), reverse=True)
             ],
@@ -389,7 +394,7 @@ class RuleBasedPokemonAgent:
     ) -> ActionScore:
         legal_pairs = [(option, score) for option, score in zip(options, scored_options) if not option.is_padding]
         if not legal_pairs:
-            return ActionScore(index=STOP_ACTION, score=0.0, reason={"fallback": 0.0})
+            return ActionScore(index=parsed_state.stop_action, score=0.0, reason={"fallback": 0.0})
 
         if self.rng.random() < self.epsilon:
             option, score = self.rng.choice(legal_pairs)
@@ -410,18 +415,18 @@ class RuleBasedPokemonAgent:
         if parsed_state.stop_legal:
             best_non_stop = max(
                 (score for option, score in legal_pairs if not option.is_stop_action),
-                default=ActionScore(index=STOP_ACTION, score=0.0, reason={"commit": 0.0}),
+                default=ActionScore(index=parsed_state.stop_action, score=0.0, reason={"commit": 0.0}),
                 key=lambda item: (item.score, -item.index),
             )
             if best_non_stop.score <= 0.0:
-                return ActionScore(index=STOP_ACTION, score=0.0, reason={"commit": 0.0})
+                return ActionScore(index=parsed_state.stop_action, score=0.0, reason={"commit": 0.0})
             return best_non_stop
 
         return max(scored_options, key=lambda item: (item.score, -item.index))
 
     def _score_option(self, parsed_state: ParsedState, option: OptionRecord) -> ActionScore:
         if option.is_stop_action:
-            return ActionScore(index=STOP_ACTION, score=0.0, reason={"commit": 0.0})
+            return ActionScore(index=parsed_state.stop_action, score=0.0, reason={"commit": 0.0})
 
         score = 0.0
         reason: dict[str, float] = {}

@@ -88,14 +88,15 @@ n = wins + losses + draws
 The single ranking formula in `rank_participants` is:
 
 ```text
-35% arena Wilson lower bound
-25% min-max normalized Elo
+50% arena Wilson lower bound
+35% Elo expected score versus the fixed 1200 baseline
 15% arena effective win rate
-25% holdout Wilson lower bound
 ```
 
-All components are in `[0, 1]`. Identical Elo values normalize to `0.5`.
-Missing holdout data is visible and receives the conservative value `0.35`.
+All components are in `[0, 1]`. Elo 1200 maps to `0.5`; unlike min-max
+normalization, adding or removing an unrelated bot does not change this
+component. Validation and final-holdout results are displayed separately and do
+not affect the arena ranking.
 
 ## Persistence and reset
 
@@ -359,6 +360,32 @@ can still fail against a diverse PPO league.
   reward, current weak shaping, and one potential-based alternative from the
   same parent with the same evaluation league.
 
+#### Next training iteration: adaptive stopping
+
+The next training improvement should be a run-level controller instead of
+another unconditional increase in the step budget. The existing `target_kl`
+protects an individual PPO update from an excessively large policy change; it
+does not stop a whole run when KL remains very small.
+
+- [ ] Add a low-KL early-stopping callback with a minimum training budget and a
+  patience window. Stop only when rolling `train/approx_kl` remains below a
+  configured threshold for several consecutive PPO updates; never stop on one
+  quiet rollout.
+- [ ] Combine low KL with at least one stagnation signal such as persistently
+  low clip fraction or no validation improvement. Small KL alone can mean a
+  converged policy, but it can also mean that the learning rate or gradients are
+  too small.
+- [ ] Log the threshold, minimum steps, patience counter, actual final step and
+  stop reason to W&B and `models/experiments/`. An external interrupt, worker
+  crash or engine error must remain failed/incomplete and must never create a
+  `.complete` marker.
+- [ ] Save the model normally when the configured early-stop condition is met,
+  then pass it through the same validation gate as a fixed-budget model.
+- [ ] Run the first comparison as a controlled ablation: identical parent,
+  seed, opponent pool and maximum budget, with only adaptive stopping changed.
+  Adopt it only if it saves compute without reducing validation strength or
+  increasing perspective bias.
+
 ### P1 — transfer learning strategy
 
 Use PPO-to-PPO transfer, not rule-based weights, as the default. A rule-based
@@ -389,6 +416,64 @@ Do not mix behaviour cloning, PPO, reward changes and architecture changes in
 one experiment. A behaviour-cloning warm start should be its own ablation with
 the same downstream PPO budget as the no-cloning control.
 
+#### V6 opponent factory
+
+The opponent factory builds four independent compact-action V6 foundations,
+evaluates them, selects the best three that pass strength and perspective gates,
+and only then fine-tunes frozen opponents for three disjoint purposes. If fewer
+than three pass the first evaluation, it trains Bases E and F once and repeats
+the evaluation across all six candidates. V6 has
+exactly 66 actions: option indices `0..64` and STOP at `65`. V5/V5b checkpoints
+remain valid opponents but are intentionally incompatible as V6 training
+parents.
+
+```bash
+# Validate every source, split and command without starting training.
+venv/bin/python scripts/run_opponent_factory.py --dry-run --wandb-mode offline
+
+# The full run uses online W&B by default. Log in before starting it.
+venv/bin/wandb login
+venv/bin/python scripts/run_opponent_factory.py --wandb-mode online
+```
+
+Individual phases can be resumed safely:
+
+```bash
+venv/bin/python scripts/run_opponent_factory.py --stage bases
+venv/bin/python scripts/run_opponent_factory.py --stage evaluate-bases
+venv/bin/python scripts/run_opponent_factory.py --stage targets --split training
+venv/bin/python scripts/run_opponent_factory.py --stage targets --split validation
+venv/bin/python scripts/run_opponent_factory.py --stage targets --split holdout
+venv/bin/python scripts/run_opponent_factory.py --stage freeze
+```
+
+Completed outputs have a sibling `.complete` marker. An existing incomplete
+output causes the factory to stop instead of silently continuing it; inspect it
+and use `--force` only when deliberately restarting that arm. Target training
+is blocked until at least three bases pass the configured evaluation gates.
+
+After freezing, inspect the three files under
+`decks/generated/opponent_factory_v6/`. The final holdout models live below
+`models/holdout/v6/`, so the arena cannot schedule them. Activate the staged
+validation and final holdout only after all target runs and independent smoke
+evaluations have passed. The old manifests remain historical V1 benchmarks.
+
+Before producing Bases B--D, the architecture ablation compares the completed
+Full Base A against two equal-budget alternatives: a shared `630 -> 96` card
+bottleneck, and the same bottleneck without the legacy 1,500-value vector.
+
+```bash
+venv/bin/python scripts/run_v6_architecture_ablation.py \
+  --wait-for-base-a \
+  --stop-factory-screen pokemon_opponent_factory_v6_bases \
+  --steps 1000000 --games 30 --wandb-mode online
+```
+
+The watcher stops the queued Full Bases B--D after Base A finishes, trains both
+compact variants with the same deck, seed, league and PPO settings, writes
+parameter profiles, and evaluates all three models on the frozen validation
+manifest. The final holdout is not touched during this architecture decision.
+
 ### P1 — Observation and Action V6
 
 - [ ] **Replace the 1,000-way action space for new models.** The current
@@ -408,6 +493,7 @@ the same downstream PPO budget as the no-cloning control.
 - [ ] **Keep hidden information honest.** Own deck composition and publicly
   revealed/discarded cards are valid inputs; opponent hand and unrevealed prize
   identities must never leak into observations.
+- [ ] **Feature standardization:** Experiment with standardizing and normalizing input features (such as HP values, card stats, damage, etc.) to evaluate its impact on training stability and convergence speed.
 
 ### P0/P1 — missing test coverage
 

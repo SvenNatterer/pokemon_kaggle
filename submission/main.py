@@ -31,7 +31,7 @@ torch.set_num_threads(1)
 
 from cg.api import Observation, to_observation_class
 from src.custom_ppo import CustomPPO
-from src.env_wrapper import PokemonTCGEnv, STOP_ACTION, advance_selection
+from src.env_wrapper import LEGACY_ACTION_SPACE_SIZE, PokemonTCGEnv, advance_selection
 
 model = None
 dummy_env = None
@@ -80,7 +80,10 @@ def agent(obs_dict: dict) -> list[int]:
             raise e
             
         my_deck = read_deck_csv()
-        dummy_env = PokemonTCGEnv(my_deck, my_deck) # dummy opponent deck
+        action_space_size = int(
+            getattr(getattr(model, "action_space", None), "n", LEGACY_ACTION_SPACE_SIZE)
+        )
+        dummy_env = PokemonTCGEnv(my_deck, my_deck, action_space_size=action_space_size)
         
     dummy_env.current_obs_dict = obs_dict
     perspective = obs.current.yourIndex if obs.current else 0
@@ -103,13 +106,21 @@ def agent(obs_dict: dict) -> list[int]:
             action = int(np.asarray(action).item())
         except Exception as e:
             print(f"Error predicting action: {e}", file=sys.stderr)
-            action = STOP_ACTION if len(pending) >= int(obs.select.minCount or 0) else 0
+            action = dummy_env.stop_action if len(pending) >= int(obs.select.minCount or 0) else 0
 
-        pending, committed, invalid = advance_selection(obs, action, pending)
+        pending, committed, invalid = advance_selection(
+            obs, action, pending, stop_action=dummy_env.stop_action
+        )
         if invalid:
-            legal = [index for index in range(valid_options) if index not in pending]
-            fallback_action = legal[0] if legal else STOP_ACTION
-            pending, committed, _ = advance_selection(obs, fallback_action, pending)
+            legal = [
+                index
+                for index in range(min(valid_options, dummy_env.stop_action))
+                if index not in pending
+            ]
+            fallback_action = legal[0] if legal else dummy_env.stop_action
+            pending, committed, _ = advance_selection(
+                obs, fallback_action, pending, stop_action=dummy_env.stop_action
+            )
         if committed:
             return [int(index) for index in pending]
 

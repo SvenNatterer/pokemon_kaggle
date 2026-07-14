@@ -49,6 +49,46 @@
             "version": "v4",
             "tags": ["legacy", "foundation", "historical_checkpoint"],
             "enabled": true
+        },
+        {
+            "id": "foundation__ppo_v6_deck_bank_54_base_a",
+            "name": "Foundation · Alakazam (Base A)",
+            "agent_type": "ppo",
+            "model_path": "models/foundation/ppo_v6_deck_bank_54_base_a.zip",
+            "deck_path": "decks/deck_bank/bank_54.csv",
+            "version": "v6",
+            "tags": ["legacy", "foundation", "base"],
+            "enabled": true
+        },
+        {
+            "id": "foundation__ppo_v6_deck_bank_55_base_b",
+            "name": "Foundation · Mega Kangaskhan ex (Base B)",
+            "agent_type": "ppo",
+            "model_path": "models/foundation/ppo_v6_deck_bank_55_base_b.zip",
+            "deck_path": "decks/deck_bank/bank_55.csv",
+            "version": "v6",
+            "tags": ["legacy", "foundation", "base"],
+            "enabled": true
+        },
+        {
+            "id": "foundation__ppo_v6_deck_bank_56_base_c",
+            "name": "Foundation · Dragapult ex (Base C)",
+            "agent_type": "ppo",
+            "model_path": "models/foundation/ppo_v6_deck_bank_56_base_c.zip",
+            "deck_path": "decks/deck_bank/bank_56.csv",
+            "version": "v6",
+            "tags": ["legacy", "foundation", "base"],
+            "enabled": true
+        },
+        {
+            "id": "foundation__ppo_v6_deck_bank_65_base_d",
+            "name": "Foundation · Metagross (Base D)",
+            "agent_type": "ppo",
+            "model_path": "models/foundation/ppo_v6_deck_bank_65_base_d.zip",
+            "deck_path": "decks/deck_bank/bank_65.csv",
+            "version": "v6",
+            "tags": ["legacy", "foundation", "base"],
+            "enabled": true
         }
     ]
 }

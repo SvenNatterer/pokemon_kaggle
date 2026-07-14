@@ -9,7 +9,7 @@ import numpy as np
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from stable_baselines3 import PPO
-from src.env_wrapper import PokemonTCGEnv, _fit_observation_to_model_space, read_sample_deck
+from src.env_wrapper import LEGACY_ACTION_SPACE_SIZE, PokemonTCGEnv, _fit_observation_to_model_space, read_sample_deck
 from src.cg.game import visualize_data
 import pandas as pd
 from src.agents.rule_based_agent import is_rule_based_model_spec
@@ -28,16 +28,24 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
     deck_a = read_deck(deck_a_path)
     deck_b = read_deck(deck_b_path)
     
-    env = PokemonTCGEnv(my_deck=deck_a, opponent_deck=deck_b, opponent_model_path=model_b_path)
-    
     model = None
     if is_rule_based_model_spec(model_a_path) or (model_a_path and os.path.exists(model_a_path)):
         print(f"Loading {model_a_path}...")
-        model = load_bot(model_a_path, env=env)
+        model = load_bot(model_a_path)
         print("Model loaded successfully.")
     else:
         print("Model not found! Generating replay using random actions instead.")
         
+    action_space_size = int(
+        getattr(getattr(model, "action_space", None), "n", LEGACY_ACTION_SPACE_SIZE)
+    )
+    env = PokemonTCGEnv(
+        my_deck=deck_a,
+        opponent_deck=deck_b,
+        opponent_model_path=model_b_path,
+        action_space_size=action_space_size,
+    )
+
     print("Resetting env...")
     obs, info = env.reset()
     done = False

@@ -54,6 +54,34 @@ function renderHoldoutResults(rows) {
         </article>`).join('') : '<span class="muted-line">Noch keine Holdout-Ergebnisse.</span>';
 }
 
+function renderMatchupMatrix(rows, pairwiseResults) {
+    const container = $('matchup-matrix');
+    if (!rows.length) {
+        container.innerHTML = '<span class="muted-line">Keine Teilnehmer gefunden.</span>';
+        return;
+    }
+    const results = new Map();
+    for (const pair of pairwiseResults || []) {
+        results.set(`${pair.bot_a}\u0000${pair.bot_b}`, pair);
+        results.set(`${pair.bot_b}\u0000${pair.bot_a}`, {
+            ...pair, wins_a: pair.wins_b, wins_b: pair.wins_a,
+        });
+    }
+    const name = row => row.display_name || row.bot_id;
+    const header = rows.map(row => `<th title="${escapeHtml(name(row))}">${escapeHtml(name(row))}</th>`).join('');
+    const body = rows.map(row => `<tr><th title="${escapeHtml(name(row))}">${escapeHtml(name(row))}</th>${rows.map(opponent => {
+        if (row.bot_id === opponent.bot_id) return '<td class="matchup-self" aria-label="gleicher Teilnehmer">—</td>';
+        const result = results.get(`${row.bot_id}\u0000${opponent.bot_id}`);
+        const games = result ? Number(result.wins_a) + Number(result.wins_b) + Number(result.draws) : 0;
+        if (!games) return '<td class="matchup-empty">–</td>';
+        const rate = (Number(result.wins_a) + 0.5 * Number(result.draws)) / games;
+        const hue = Math.round(rate * 120);
+        const title = `${result.wins_a} Siege / ${result.wins_b} Niederlagen / ${result.draws} Unentschieden (${games} Spiele)`;
+        return `<td class="matchup-result" style="--matchup-hue:${hue}" title="${escapeHtml(title)}"><strong>${percent(rate)}</strong><small>${games} Sp.</small></td>`;
+    }).join('')}</tr>`).join('');
+    container.innerHTML = `<table class="matchup-matrix"><thead><tr><th>Zeile \\ Spalte</th>${header}</tr></thead><tbody>${body}</tbody></table>`;
+}
+
 function renderDeckNameField(row) {
     const name = unsavedDeckNames.get(row.bot_id) || String(row.display_name || '');
     return `<label class="deck-name-field"><input class="deck-name-input" type="text" value="${escapeHtml(name)}" data-bot-id="${escapeHtml(row.bot_id)}" aria-label="Name für Checkpoint ${escapeHtml(row.bot_id)}" maxlength="100" title="Diesen Checkpoint unabhängig umbenennen"></label>`;
@@ -137,6 +165,7 @@ function renderStatus(data) {
     // leaderboard DOM here would interrupt typing and can trigger a premature save.
     const editingDeckName = document.activeElement?.classList.contains('deck-name-input');
     if (!editingDeckName) renderLeaderboard(data.leaderboard || []);
+    renderMatchupMatrix(data.leaderboard || [], data.pairwise_results || []);
     renderEvaluation(data.evaluation || {}, data.champion || {}, data.participants || []);
 
     const ppoBots = (data.participants || []).filter(p => p.enabled && p.bot_type === 'ppo');

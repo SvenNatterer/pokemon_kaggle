@@ -70,11 +70,12 @@ class RewardBreakdownCallback(BaseCallback):
     def _on_rollout_end(self) -> None:
         for key, recent_values in self.episode_rewards.items():
             if len(recent_values) > 0:
-                mean_val = sum(recent_values) / len(recent_values)
-                self.logger.record(f"rewards/{key}", mean_val)
+                if any(v != 0.0 for v in recent_values):
+                    mean_val = sum(recent_values) / len(recent_values)
+                    self.logger.record(f"rewards/{key}", mean_val)
 
 from stable_baselines3.common.monitor import Monitor
-from src.env_wrapper import PokemonTCGEnv
+from src.env_wrapper import LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE, PokemonTCGEnv
 from src.custom_ppo import CustomPPO, PokemonTCGRecurrentPolicy
 
 def read_deck(deck_path):
@@ -102,6 +103,16 @@ def save_final_model_atomically(model, model_path):
         if os.path.exists(temporary_zip):
             os.unlink(temporary_zip)
 
+
+def validate_policy_action_space(model, expected_size, policy_version):
+    loaded_size = int(getattr(getattr(model, "action_space", None), "n", 0))
+    if loaded_size != expected_size:
+        raise RuntimeError(
+            f"Policy/action-space mismatch: checkpoint has {loaded_size} actions, "
+            f"but --policy-version={policy_version} requires {expected_size}. "
+            "V5 and V6 checkpoints are intentionally incompatible."
+        )
+
 def load_opponent_pool(pool_path):
     if not pool_path:
         return None
@@ -128,7 +139,15 @@ def load_opponent_pool(pool_path):
         })
     return pool
 
-def make_env(deck_path, opp_deck_path, opp_model_path, sparse_rewards=False, opponent_pool=None, rotate_perspective=False):
+def make_env(
+    deck_path,
+    opp_deck_path,
+    opp_model_path,
+    sparse_rewards=False,
+    opponent_pool=None,
+    rotate_perspective=False,
+    action_space_size=LEGACY_ACTION_SPACE_SIZE,
+):
     def _init():
         import torch
         torch.set_num_threads(1)
@@ -141,6 +160,7 @@ def make_env(deck_path, opp_deck_path, opp_model_path, sparse_rewards=False, opp
             sparse_rewards=sparse_rewards,
             opponent_pool=opponent_pool,
             rotate_perspective=rotate_perspective,
+            action_space_size=action_space_size,
         )
         return Monitor(env)
     return _init
@@ -171,6 +191,24 @@ def train():
     parser.add_argument("--belief-dim", type=int, default=64, help="Size of the learned belief embedding used by --belief-actor")
     parser.add_argument("--no-belief-detach", dest="belief_detach", action="store_false", help="Allow PPO loss gradients into the belief encoder")
     parser.add_argument("--rotate-perspective", action="store_true", help="Randomly play as Player 0 or Player 1 each episode")
+    parser.add_argument("--seed", type=int, default=None, help="Policy and vector-environment seed for reproducible experiment families")
+    parser.add_argument(
+        "--policy-version",
+        choices=("v5", "v6"),
+        default="v5",
+        help="V6 uses a compact 66-action head; V5 preserves the legacy 1,000-action space.",
+    )
+    parser.add_argument(
+        "--feature-variant",
+        choices=("full", "balanced", "compact", "compact_no_legacy"),
+        default="full",
+        help="Structured feature width; compact_no_legacy ignores the 1,500-value legacy vector.",
+    )
+    parser.add_argument(
+        "--card-table",
+        action="store_true",
+        help="Encode every card ID once per feature-extractor forward and reuse it by lookup.",
+    )
     parser.add_argument(
         "--reserved-opponents", action="append", default=[],
         help="Opponent manifest reserved for validation/final evaluation; training overlap is rejected.",
@@ -193,6 +231,7 @@ def train():
             [args.opp_pool] if args.opp_pool else [],
         )
     opponent_pool = load_opponent_pool(args.opp_pool)
+    action_space_size = V6_ACTION_SPACE_SIZE if args.policy_version == "v6" else LEGACY_ACTION_SPACE_SIZE
     
     opponent_description = f"pool {args.opp_pool}" if opponent_pool else opp_deck_path
     print(f"Initializing environment with {args.num_envs} workers for deck {args.deck} against {opponent_description}...")
@@ -205,9 +244,12 @@ def train():
             args.sparse_rewards,
             opponent_pool=opponent_pool,
             rotate_perspective=args.rotate_perspective,
+            action_space_size=action_space_size,
         )
         for _ in range(args.num_envs)
     ])
+    if args.seed is not None:
+        env.seed(args.seed)
     
     model_path = resolve_model_path(args.model_name)
     experiment_file = registry_path(model_path)
@@ -234,7 +276,12 @@ def train():
 
     if args.continue_existing:
         print(f"Explicitly continuing target model {model_path}.zip...")
-        model = CustomPPO.load(model_path, device="cpu")
+        model = CustomPPO.load(model_path, env=env, device="cpu")
+        try:
+            validate_policy_action_space(model, action_space_size, args.policy_version)
+        except RuntimeError:
+            env.close()
+            raise
         if not bool(getattr(model.policy.features_extractor, "structured_v2", False)):
             env.close()
             raise RuntimeError(
@@ -242,7 +289,35 @@ def train():
                 "cannot be resumed as Observation V2. Keep it as an --opp-model and choose a "
                 "fresh --model-name such as models/ppo_v5_deck_<id>.zip."
             )
-        model.set_env(env)
+        loaded_feature_variant = str(
+            getattr(model.policy.features_extractor, "feature_variant", "full")
+        )
+        if loaded_feature_variant != args.feature_variant:
+            env.close()
+            raise RuntimeError(
+                f"Feature variant mismatch: checkpoint uses {loaded_feature_variant}, "
+                f"but --feature-variant={args.feature_variant}. Start a fresh model."
+            )
+        loaded_card_table = bool(
+            getattr(model.policy.features_extractor, "use_card_table", False)
+        )
+        if loaded_card_table != args.card_table:
+            if args.card_table and not loaded_card_table:
+                print("Enabling the output-equivalent card table on the loaded checkpoint...")
+                model.policy.features_extractor.use_card_table = True
+                policy_kwargs = dict(getattr(model, "policy_kwargs", {}) or {})
+                extractor_kwargs = dict(
+                    policy_kwargs.get("features_extractor_kwargs", {}) or {}
+                )
+                extractor_kwargs["use_card_table"] = True
+                policy_kwargs["features_extractor_kwargs"] = extractor_kwargs
+                model.policy_kwargs = policy_kwargs
+            else:
+                env.close()
+                raise RuntimeError(
+                    "Card-table mismatch: checkpoint uses card_table=True, but "
+                    "--card-table was omitted. Keep the saved setting when continuing."
+                )
         loaded_n_steps = int(getattr(model, "n_steps", args.n_steps))
         if loaded_n_steps != args.n_steps:
             raise RuntimeError(
@@ -276,6 +351,10 @@ def train():
         from src.custom_policy import PokemonTCGFeatureExtractor
         policy_kwargs = dict(
             features_extractor_class=PokemonTCGFeatureExtractor,
+            features_extractor_kwargs={
+                "feature_variant": args.feature_variant,
+                "use_card_table": args.card_table,
+            },
             use_belief_actor=args.belief_actor,
             belief_dim=args.belief_dim,
             detach_belief_actor=args.belief_detach,
@@ -294,6 +373,7 @@ def train():
             clip_range=args.clip_range,
             target_kl=args.target_kl,
             c_aux=args.aux_coef,
+            seed=args.seed,
             device="cpu",
             tensorboard_log="logs/",
             policy_kwargs=policy_kwargs
