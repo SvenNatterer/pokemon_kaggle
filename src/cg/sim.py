@@ -17,6 +17,32 @@ class SerialData(ctypes.Structure):
         ("selectPlayer", ctypes.c_int)
     ]
 
+class V6ObservationBuffer(ctypes.Structure):
+    _fields_ = [
+        ("entity_ids", ctypes.c_int * 12),
+        ("entity_features", ctypes.c_float * (12 * 36)),
+        ("entity_tool_ids", ctypes.c_int * 12),
+        ("entity_pre_evolution_ids", ctypes.c_int * (12 * 3)),
+        ("entity_energy_card_ids", ctypes.c_int * (12 * 8)),
+        ("hand_ids", ctypes.c_int * 24),
+        ("discard_ids", ctypes.c_int * (2 * 30)),
+        ("revealed_ids", ctypes.c_int * 120),
+        ("prize_ids", ctypes.c_int * (2 * 6)),
+        ("search_ids", ctypes.c_int * 60),
+        ("looking_ids", ctypes.c_int * 60),
+        ("own_deck_ids", ctypes.c_int * 60),
+        ("context_card_ids", ctypes.c_int * 3),
+        ("log_card_ids", ctypes.c_int * 10),
+        ("option_card_ids", ctypes.c_int * 65),
+        ("option_attack_ids", ctypes.c_int * 65),
+        ("option_types", ctypes.c_int * 65),
+        ("option_areas", ctypes.c_int * 65),
+        ("option_features", ctypes.c_float * (65 * 21)),
+        ("vector", ctypes.c_float * 1500),
+        ("aux_target", ctypes.c_float * 2000),
+        ("action_mask", ctypes.c_int8 * 66),
+    ]
+
 os_name = platform.system()
 if os_name == 'Windows':
     lib_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cg.dll")
@@ -39,6 +65,9 @@ lib.BattleFinish.argtypes = [ctypes.c_void_p]
 
 lib.GetBattleData.restype = SerialData
 lib.GetBattleData.argtypes = [ctypes.c_void_p]
+
+lib.GetV6Observation.restype = ctypes.c_int
+lib.GetV6Observation.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.POINTER(V6ObservationBuffer)]
 
 lib.Select.restype = ctypes.c_int
 lib.Select.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.c_int]

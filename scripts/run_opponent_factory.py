@@ -128,9 +128,9 @@ def validate_static_inputs(config: dict[str, Any]) -> None:
         raise FileNotFoundError("Missing opponent-factory inputs:\n  - " + "\n  - ".join(missing))
 
 
-def common_train_args(config: dict[str, Any]) -> list[str]:
+def common_train_args(config: dict[str, Any], scalar_obs: bool = False) -> list[str]:
     defaults = config["defaults"]
-    return [
+    args = [
         "--policy-version", "v6",
         "--feature-variant", "full",
         "--card-table",
@@ -147,9 +147,12 @@ def common_train_args(config: dict[str, Any]) -> list[str]:
         "--belief-dim", str(defaults["belief_dim"]),
         "--rotate-perspective",
     ]
+    if scalar_obs:
+        args.append("--scalar-obs")
+    return args
 
 
-def base_command(config: dict[str, Any], base: dict[str, Any], python: str) -> list[str]:
+def base_command(config: dict[str, Any], base: dict[str, Any], python: str, scalar_obs: bool = False) -> list[str]:
     defaults = config["defaults"]
     return [
         python, "src/train.py",
@@ -158,12 +161,12 @@ def base_command(config: dict[str, Any], base: dict[str, Any], python: str) -> l
         "--timesteps", str(defaults["base_steps"]),
         "--seed", str(base["seed"]),
         "--aux-coef", str(defaults["base_aux_coefficient"]),
-        *common_train_args(config),
+        *common_train_args(config, scalar_obs),
     ]
 
 
 def finetune_command(
-    config: dict[str, Any], target: dict[str, Any], base: dict[str, Any], python: str
+    config: dict[str, Any], target: dict[str, Any], base: dict[str, Any], python: str, scalar_obs: bool = False
 ) -> list[str]:
     defaults = config["defaults"]
     target_seed = int(base["seed"]) + int(str(target["deck_id"]).split("_")[-1])
@@ -175,7 +178,7 @@ def finetune_command(
         "--timesteps", str(defaults["finetune_steps"]),
         "--seed", str(target_seed),
         "--aux-coef", str(defaults["finetune_aux_coefficient"]),
-        *common_train_args(config),
+        *common_train_args(config, scalar_obs),
     ]
 
 
@@ -209,7 +212,7 @@ def run_command(command: list[str], wandb_mode: str) -> None:
 
 def run_bases(
     config: dict[str, Any], python: str, dry_run: bool, force: bool, wandb_mode: str,
-    bases: list[dict[str, Any]] | None = None,
+    bases: list[dict[str, Any]] | None = None, scalar_obs: bool = False,
 ) -> None:
     for base in bases or config["bases"]:
         output = repo_path(base["model_path"])
@@ -219,7 +222,7 @@ def run_bases(
             continue
         if output.exists() and not force:
             raise RuntimeError(f"Incomplete base exists; inspect it or rerun with --force: {relative(output)}")
-        command = base_command(config, base, python)
+        command = base_command(config, base, python, scalar_obs)
         if dry_run:
             print_command(command)
             continue
@@ -231,14 +234,14 @@ def run_bases(
 
 
 def evaluate_bases(
-    config: dict[str, Any], python: str, dry_run: bool, wandb_mode: str
+    config: dict[str, Any], python: str, dry_run: bool, wandb_mode: str, scalar_obs: bool = False
 ) -> None:
     bases = list(config["bases"])
     if dry_run:
         print_command(base_evaluation_command(config, python, bases))
         fallback_bases = list(config.get("fallback_bases", []))
         print("If fewer than the required bases pass, train two fallback bases:")
-        run_bases(config, python, True, False, wandb_mode, fallback_bases)
+        run_bases(config, python, True, False, wandb_mode, fallback_bases, scalar_obs)
         print_command(base_evaluation_command(config, python, bases + fallback_bases))
         return
 
@@ -290,7 +293,7 @@ def evaluate_bases(
             f"Only {len(passing)} bases passed; training two fallback bases.",
             flush=True,
         )
-        run_bases(config, python, False, False, wandb_mode, fallback_bases)
+        run_bases(config, python, False, False, wandb_mode, fallback_bases, scalar_obs)
         bases.extend(fallback_bases)
         passing, rejected = run_evaluation(bases)
         fallback_used = True
@@ -347,7 +350,7 @@ def target_assignments(config: dict[str, Any], dry_run: bool) -> list[tuple[dict
 
 def run_targets(
     config: dict[str, Any], python: str, dry_run: bool, force: bool,
-    split: str | None, wandb_mode: str,
+    split: str | None, wandb_mode: str, scalar_obs: bool = False,
 ) -> None:
     for target, base in target_assignments(config, dry_run):
         if split and target["split"] != split:
@@ -362,7 +365,7 @@ def run_targets(
             raise RuntimeError(f"Base is not marked complete: {relative(source)}")
         if output.exists() and not force:
             raise RuntimeError(f"Incomplete target exists; inspect it or rerun with --force: {relative(output)}")
-        command = finetune_command(config, target, base, python)
+        command = finetune_command(config, target, base, python, scalar_obs)
         if dry_run:
             print(f"cp {shlex.quote(relative(source))} {shlex.quote(relative(output))}")
             print_command(command)
@@ -453,6 +456,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wandb-mode", choices=("online", "offline", "disabled"), default="online")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true", help="Explicitly replace training outputs")
+    parser.add_argument("--scalar-obs", action="store_true", help="Train with flat vector observation space (V5b hybrid)")
     return parser.parse_args()
 
 
@@ -462,11 +466,11 @@ def main() -> int:
     validate_config(config)
     validate_static_inputs(config)
     if args.stage in {"bases", "all"}:
-        run_bases(config, args.python, args.dry_run, args.force, args.wandb_mode)
+        run_bases(config, args.python, args.dry_run, args.force, args.wandb_mode, scalar_obs=args.scalar_obs)
     if args.stage in {"evaluate-bases", "all"}:
-        evaluate_bases(config, args.python, args.dry_run, args.wandb_mode)
+        evaluate_bases(config, args.python, args.dry_run, args.wandb_mode, scalar_obs=args.scalar_obs)
     if args.stage in {"targets", "all"}:
-        run_targets(config, args.python, args.dry_run, args.force, args.split, args.wandb_mode)
+        run_targets(config, args.python, args.dry_run, args.force, args.split, args.wandb_mode, scalar_obs=args.scalar_obs)
     if args.stage in {"freeze", "all"}:
         freeze(config, args.dry_run)
     return 0

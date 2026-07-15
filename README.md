@@ -262,26 +262,146 @@ will then show all arms as normal PPO candidates; use **Evaluation & Champion**
 to inspect the recorded validation result and promote only its winner. The
 original parent model is never overwritten.
 
+## Current RL architecture and cost/benefit status
+
+This section records the repository audit from 2026-07-15. It describes the
+current V6 working state, including changes that are not yet committed or
+portable to every supported platform. A component listed as present is not
+automatically production-ready; the P0 correctness and portability gates below
+still take precedence over additional training or architecture work.
+
+The implemented policy stack is already close to the intended target:
+
+```text
+structured card/entity/option observation
+                 -> shared card and option encoders
+                 -> 256-unit actor and critic LSTMs
+                 -> state-conditioned scoring of legal engine options
+                 -> hard action mask and autoregressive STOP selection
+```
+
+| Component | Current status | Remaining gap |
+| --- | --- | --- |
+| Recurrent PPO | Present | Separate one-layer, 256-unit actor and critic LSTMs are already used. |
+| Structured observation | Present | Twelve field entities, attachments, hand, discard, known/revealed cards, logs, own deck and legal options are encoded. |
+| Relational representation | Partial | Static attack, skill, evolution and attachment relations exist; learned entity-to-entity attention/message passing does not. |
+| Dynamic action representation | Present | V6 scores each legal engine option with shared weights and uses 65 option slots plus STOP. |
+| Action masking | Present but not yet correct in every perspective | The rotated-player pending-selection bug below can expose an already selected option as legal. |
+| Hidden-card belief auxiliary task | Present | It is optional during fine-tuning and must remain isolated from actor-visible simulator truth. |
+| Reward design | Mostly terminal | The default is `+1/-1` with very small prize/damage deltas; sparse mode exists, but potential-based shaping does not. |
+| Historical opponent pool | Present | Static weighted PPO and rule-based opponents are sampled per episode. |
+| Self-play | Partial | Frozen self-play and historical snapshots exist; iterative league insertion, PFSP and exploiters do not. |
+| Validation and holdout evaluation | Present | Balanced perspectives, Wilson lower bounds, worst matchup, promotion gates and separate manifests exist. |
+| Behaviour cloning / DAgger | Missing | Replays are not yet a complete `(actor observation, legal mask, expert action)` dataset. |
+| Entity/temporal Transformer | Missing by design | A small entity-attention ablation is later work; a temporal Transformer/GTrXL is not a current priority. |
+| Population-based training | Missing by design | PBT remains last because it multiplies compute before the cheaper opponent-sampling and correctness work is exhausted. |
+
+### Measured V6 architecture trade-off
+
+The equal-budget validation ablation in
+`logs/v6_architecture_ablation/results_100_games.json` compared the same deck,
+seed, league and PPO settings over 800 games per candidate:
+
+| Variant | Policy parameters | Validation score | Decision |
+| --- | ---: | ---: | --- |
+| Full | 13.30 M | 88.75% | Best current strength; keep for champion candidates. |
+| Compact | 4.82 M | 85.88% | Best efficiency candidate when many cheaper opponent policies are needed. |
+| Balanced | 6.42 M | 85.75% | No measured advantage over Compact in this run. |
+| Compact without legacy vector | 4.01 M | 64.63% | Rejected; the structured path does not yet replace all global information. |
+
+Full achieved an 86.37% Wilson lower bound, a 77% worst-matchup score and only
+a three-point player-perspective gap. Compact removes about 64% of the
+parameters for a 2.88-point aggregate score reduction. Do not remove the legacy
+global vector until the missing information has been identified and represented
+structurally.
+
+### Audit snapshot of the V6 opponent factory
+
+The factory has four configured foundations plus two fallbacks and 16 target
+decks split into four training, six validation and six holdout targets. All four
+primary bases passed the gates; A, C and B were selected, so the fallbacks were
+not needed. At the audit snapshot, six targets were complete (four training and
+two validation), `bank_36` was training and nine were pending. This useful work
+must be finished through the same evaluation/freeze gates, but correctness fixes
+must never be hot-applied halfway through an individual training run. Record the
+code revision for pre-fix and post-fix targets and compare them explicitly.
+
+### Priority order by expected cost/benefit
+
+| Rank | Work item | Expected benefit | Remaining effort |
+| ---: | --- | --- | --- |
+| 1 | Fix rotated-perspective pending-selection masks and add the invariant test. | Very high: removes known invalid training samples. | Low |
+| 2 | Add native-symbol detection, Python fallback and reproducible dependencies; verify Linux. | Very high: preserves the measured speed-up without breaking Kaggle. | Low--medium |
+| 3 | Finish, smoke-test and freeze the existing V6 opponent factory outputs. | Very high: converts spent compute into trustworthy leagues. | Medium, mostly compute |
+| 4 | Add health counters and adaptive run-level stopping. | High: catches corruption and avoids training after learning stalls. | Low--medium |
+| 5 | Replace static opponent weights with a capped PFSP-lite historical league. | High: spends samples on informative weaknesses without forgetting old strategies. | Medium |
+| 6 | Complete rule-bot scenarios and its cross-play matrix. | High: improves diagnosis and supplies a stable curriculum/baseline. | Medium |
+| 7 | Test one small entity-attention arm after the P0 gates. | Potentially high: addresses the largest architecture gap. | Medium--high plus retraining |
+| 8 | Test behaviour-cloning warm start from replay/expert data. | Medium--high after a legal observation/action dataset exists. | Medium--high |
+| 9 | Temporal Transformer/GTrXL and population-based training. | Uncertain at the current maturity level. | Very high; defer |
+
+This order reuses the factory, evaluation and recurrent-policy work already in
+the repository. A new temporal architecture is not justified until the known
+correctness issue and the cheaper training-loop improvements are resolved.
+
 ## Roadmap / To-dos
 
 This is the implementation order for making model improvements credible. Do not
 start a larger training run merely because it is convenient; complete the
 corresponding measurement step first.
 
+### P0 — fix V6 correctness and Kaggle portability
+
+These items have the highest priority. They protect every later reward,
+opponent-pool and architecture comparison from invalid samples or a local-only
+implementation.
+
+- [ ] **Fix pending-selection ownership under perspective rotation.** Both native
+  and Python observation paths currently choose the default pending list using
+  `perspective == 0`; they must use whether the requested perspective is the
+  learner perspective. In the audit, masked random play produced `0/1,135`
+  invalid learner actions as player 0 but `5/400` as player 1.
+- [ ] **Add the regression invariant for both perspectives.** During long legal
+  rollouts, an action sampled from `action_mask` must never be rejected, an
+  already selected option must remain masked, and STOP must agree with
+  `minCount/maxCount`.
+- [ ] **Make native observation encoding an optional optimization.** Detect a
+  ctypes-compatible `GetV6Observation` export and fall back to the Python encoder
+  when it is not available. The macOS `.dylib` has the usable symbol; the x86-64
+  Linux `.so` currently exposes `_GetV6Observation` instead, while the ARM64
+  Linux `.so` and Windows `.dll` expose no usable equivalent. Rebuild and verify
+  the Kaggle/Linux library before use.
+- [ ] **Make the JSON fast path reproducible.** Add `orjson` to the installation
+  requirements or retain a tested standard-library `json` fallback.
+- [ ] **Promote the parity scripts into automated tests.** Cover both player
+  perspectives, autoregressive pending selections, hidden-information rules and
+  option overflow. Hundreds of local Python/C++ states matched exactly, which is
+  encouraging but not yet sufficient automated coverage.
+- [ ] **Expose training-health counters.** Log invalid learner actions, selected
+  opponent label, option-count percentiles/overflows and native engine errors to
+  W&B and the experiment record; fail evaluation gates on unresolved engine
+  corruption rather than treating it as ordinary game variance.
+
+Do not silently patch a running target. Apply the correction at a model boundary,
+then run a controlled pre-fix/post-fix comparison and decide from validation
+whether affected foundations or targets need retraining.
+
 ### P0 — establish trustworthy comparison sets
 
-- [ ] **Create a validation league with 6--10 opponents.** It is used repeatedly
-  for checkpoint choice, curriculum weighting and hyperparameter experiments.
-- [ ] **Create a separate final holdout with 6--10 different opponents.** It is
-  used only after a validation winner has been selected. If its result changes a
-  model-choice decision, retire it and create a fresh final holdout.
-- [ ] **Add enough eligible frozen PPO bots.** The current local model inventory
-  contains too few non-training/non-holdout opponents for a statistically useful
-  validation league. Train or retain diverse historical bots before creating the
-  manifest.
-- [ ] **Version the manifests.** Commit `decks/validation_opponents.json` and
-  `decks/final_holdout_opponents.json` and never silently edit them during an
-  experiment series.
+- [x] **Create the historical V1 validation league with 6--10 opponents.** The
+  committed manifest currently contains eight frozen PPO/rule-based opponents.
+- [x] **Create a separate historical V1 final holdout.** The committed
+  `decks/holdout_opponents.json` contains nine opponents and remains separate
+  from validation and training.
+- [x] **Retain enough eligible frozen V1 PPO/rule-based bots.** The current
+  historical manifests are large enough for the existing benchmark protocol.
+- [x] **Version the current manifests.** Both `decks/validation_opponents.json`
+  and `decks/holdout_opponents.json` are tracked; never replace a frozen model at
+  the same path during an experiment series.
+- [ ] **Finish and freeze the new V6 comparison sets.** Complete the opponent
+  factory, smoke-test every target, write the generated training/validation/
+  holdout manifests and commit their exact model hashes. The old V1 final
+  holdout is historical evidence, not a fresh final statement for V6.
 - [ ] **Evaluate 100 games/opponent for normal selection, 200 for close calls.**
   Always balance player 0 and player 1, compare Wilson lower bound first, then
   worst matchup and perspective gap.
@@ -316,7 +436,7 @@ model selection. The final holdout should include frozen opponents that were not
 inspected during training decisions. A rule-based opponent is useful in both,
 but should make up no more than one or two opponents in each set.
 
-### P0 — evaluate and improve the rule-based bot
+### P1 — evaluate and improve the rule-based bot
 
 - [ ] **Create a benchmark matrix for the rule bot.** Run it against every PPO
   candidate and across at least 5 distinct decks, with 100 games per pair and
@@ -343,22 +463,40 @@ can still fail against a diverse PPO league.
 
 ### P1 — controlled PPO and reward optimization
 
-- [ ] Run the three existing fine-tuning arms from the best frozen parent:
-  `epochs2`, `aux0`, and `sparse`.
-- [ ] Promote a winner only through the validation gate. Keep the parent and all
-  arms in the arena until the regression picture is clear.
+- [ ] **Repeat the three historical fine-tuning arms as a clean V6 ablation:**
+  `epochs2`, `aux0`, and `sparse`. Historical V5/V5b artifacts already exist;
+  do not treat them as a controlled V6 result or spend compute repeating them
+  before the P0 fixes and factory freeze.
+- [ ] **Promote a V6 winner only through the validation gate.** Keep the parent
+  and all arms in the arena until the regression picture is clear; never use the
+  final holdout to choose an arm.
 - [ ] If no arm wins convincingly, test one additional factor at a time:
   `gamma` (`0.995` vs `0.999`), entropy coefficient, then clip range.
-- [ ] Add training-health review for KL, clip fraction, entropy, explained
-  variance, value loss, auxiliary loss and invalid-action fallback count. A run
-  with a collapsed entropy or unstable value estimate is not a good candidate
-  even if one small evaluation happens to look good.
-- [ ] Use failure-weighted opponent sampling only after validation identifies a
-  repeatable weak matchup. Cap the weight of one matchup so that it does not
-  cause catastrophic forgetting elsewhere.
+- [ ] **Apply the P0 training-health gate to every arm.** Review KL, clip
+  fraction, entropy, explained variance, value loss, auxiliary loss, invalid
+  learner actions, option overflow and native engine errors. A corrupted or
+  collapsed run is not a candidate even if one small evaluation looks good.
 - [ ] Do reward ablations, not intuition-only reward edits. Compare terminal
   reward, current weak shaping, and one potential-based alternative from the
   same parent with the same evaluation league.
+
+#### PFSP-lite historical league
+
+The current opponent pool is useful but statically weighted. Upgrade it only
+after the P0 masks and opponent labels are trustworthy:
+
+- [ ] Aggregate games, wins, losses and uncertainty per training opponent over
+  each completed segment; do not use validation or holdout games to set weights.
+- [ ] Prefer under-sampled opponents and matchups with neither near-certain wins
+  nor near-certain losses, while retaining a random-sampling floor.
+- [ ] Cap the probability of any one opponent and retain frozen historical and
+  rule-based opponents so that one weakness cannot cause catastrophic
+  forgetting.
+- [ ] Insert a new policy snapshot only after it passes a validation gate or
+  adds a materially different cross-play vector; keep roughly 5--10 useful
+  snapshots instead of every checkpoint.
+- [ ] Compare static sampling and PFSP-lite from the same parent, seed, step
+  budget and training manifest before adopting it.
 
 #### Next training iteration: adaptive stopping
 
@@ -416,6 +554,17 @@ Do not mix behaviour cloning, PPO, reward changes and architecture changes in
 one experiment. A behaviour-cloning warm start should be its own ablation with
 the same downstream PPO budget as the no-cloning control.
 
+Current implementation status:
+
+- [x] The opponent factory can copy compatible PPO foundations and fine-tune
+  separate target models without overwriting the parent.
+- [ ] Compare V6 transfer against scratch with equal target-deck budget and the
+  same frozen evaluation league.
+- [ ] Build a replay/demonstration dataset containing the actor-visible
+  observation, legal mask, selected legal option, perspective and outcome.
+- [ ] Only then run behaviour cloning as a warm-start ablation; keep DAgger and
+  human labelling out of the first experiment.
+
 #### V6 opponent factory
 
 The opponent factory builds four independent compact-action V6 foundations,
@@ -426,6 +575,17 @@ the evaluation across all six candidates. V6 has
 exactly 66 actions: option indices `0..64` and STOP at `65`. V5/V5b checkpoints
 remain valid opponents but are intentionally incompatible as V6 training
 parents.
+
+Current factory status (2026-07-15):
+
+- [x] Four primary V6 bases were trained and evaluated. All four passed the
+  configured gates; Bases A, C and B were selected. Fallback Bases E and F were
+  not needed.
+- [ ] Complete all 16 target fine-tunes. Six have `.complete` markers: 4/4
+  training, 2/6 validation and 0/6 holdout. `bank_36` was running at the audit
+  snapshot; ten targets were not yet complete.
+- [ ] Smoke-test every target, freeze the models and generate/version the three
+  V6 manifests with exact model hashes.
 
 ```bash
 # Validate every source, split and command without starting training.
@@ -458,9 +618,10 @@ After freezing, inspect the three files under
 validation and final holdout only after all target runs and independent smoke
 evaluations have passed. The old manifests remain historical V1 benchmarks.
 
-Before producing Bases B--D, the architecture ablation compares the completed
-Full Base A against two equal-budget alternatives: a shared `630 -> 96` card
-bottleneck, and the same bottleneck without the legacy 1,500-value vector.
+The completed architecture ablation compared Full Base A with Compact,
+Balanced and Compact-without-legacy variants under an equal budget and over 800
+validation games per candidate. Full won; Compact remains the compute-efficient
+opponent option, and removing the legacy 1,500-value vector is rejected for now.
 
 ```bash
 venv/bin/python scripts/run_v6_architecture_ablation.py \
@@ -469,42 +630,54 @@ venv/bin/python scripts/run_v6_architecture_ablation.py \
   --steps 1000000 --games 30 --wandb-mode online
 ```
 
-The watcher stops the queued Full Bases B--D after Base A finishes, trains both
-compact variants with the same deck, seed, league and PPO settings, writes
-parameter profiles, and evaluates all three models on the frozen validation
-manifest. The final holdout is not touched during this architecture decision.
+The command is retained for reproducibility. Its watcher stops queued Full
+bases after Base A, trains the configured alternatives with the same deck,
+seed, league and PPO settings, writes parameter profiles, and evaluates them on
+the frozen validation manifest. The final holdout is not touched during this
+architecture decision.
 
 ### P1 — Observation and Action V6
 
-- [ ] **Replace the 1,000-way action space for new models.** The current
-  `STOP_ACTION=999` preserves legacy checkpoint compatibility but leaves a very
-  large masked action head while only up to 65 options are structurally encoded.
-  V6 should use roughly `MAX_ENCODED_OPTIONS + 1` actions, with STOP immediately
-  after the encoded option range.
-- [ ] **Make V6 explicitly incompatible.** Give it a new observation/policy
-  version; retain V5 models as frozen opponents and benchmarks. Do not silently
-  load a V5 actor into a V6 action space.
-- [ ] **Measure option-count coverage first.** Log the maximum and percentile
-  count of engine options. If real games regularly exceed 65 choices, increase
-  the encoded range before shrinking the action space.
-- [ ] **Ablate the legacy scalar vector.** The structured card/entity/option
-  encoder is the preferred path. Measure whether the 1,500-value legacy vector
-  still adds validation value or only increases model capacity and noise.
+- [x] **Implement the compact V6 action space.** Current V6 models and the
+  opponent factory use option indices `0..64` plus STOP at `65`; the 1,000-action
+  path remains for V5 checkpoint compatibility.
+- [x] **Make V5 and V6 explicitly incompatible for continuation training.** A
+  V5 actor is not silently padded or truncated into a V6 action space; V5 models
+  remain valid frozen opponents and benchmarks.
+- [ ] **Make V6 the default only after the P0 gates and a controlled V5/V6
+  comparison.** The general training CLI still defaults to V5/1,000 actions.
+- [ ] **Measure option-count coverage.** Maximum/overflow counters exist, but a
+  recorded percentile distribution and acceptance gate are still missing. If
+  real games regularly exceed 65 choices, increase the encoded range.
+- [x] **Ablate the legacy scalar vector.** Removing it reduced validation score
+  from 88.75% to 64.63%; retain it until the missing global information is
+  represented structurally.
 - [ ] **Keep hidden information honest.** Own deck composition and publicly
   revealed/discarded cards are valid inputs; opponent hand and unrevealed prize
-  identities must never leak into observations.
-- [ ] **Feature standardization:** Experiment with standardizing and normalizing input features (such as HP values, card stats, damage, etc.) to evaluate its impact on training stability and convergence speed.
+  identities must never leak into observations. Add mirrored-state tests that
+  change simulator-private truth while actor-visible inputs remain unchanged.
+- [ ] **Feature standardization:** Experiment with standardizing and normalizing
+  input features such as HP, card stats and damage, and evaluate stability and
+  convergence from the same parent.
+- [ ] **Run one small relational ablation after P0.** Add one or two lightweight
+  self-attention/message-passing blocks over the twelve field entities while
+  keeping PPO, LSTM, reward, deck and opponent pool fixed.
+- [ ] **Defer temporal Transformer/GTrXL, asymmetric critic and PBT.** Revisit
+  them only if the smaller entity-attention arm wins across seeds and the
+  training/evaluation pipeline is stable.
 
 ### P0/P1 — missing test coverage
 
-- [ ] **Run the functional observation tests under pytest in CI.** The current
-  environment has no pytest package in the project venv, so function-style tests
-  are not included in the `unittest` suite by default.
+- [ ] **Run the functional observation tests under pytest in CI.** Local audit
+  runs passed 35 targeted tests plus 29 generated subtests, but the repository
+  still needs a reproducible CI command and declared test dependencies.
 - [ ] **Environment invariants:** run long random/legal rollouts and assert
   eventual termination, legal action masks, no duplicate selected option,
   non-negative zone sizes, 60-card conservation and correct winner perspective.
 - [ ] **Perspective symmetry:** mirror a fixed game state and verify that
-  observations/rewards map consistently between player 0 and player 1.
+  observations/rewards map consistently between player 0 and player 1. This is
+  a P0 gate because the audit reproduced invalid masked actions only for the
+  rotated learner perspective.
 - [ ] **Selection edge cases:** test min/max counts, STOP legality, repeated
   selections, zero-option states and more-than-65-option behavior explicitly.
 - [ ] **Evaluation tests:** verify multi-candidate progress accounting,
@@ -513,18 +686,26 @@ manifest. The final holdout is not touched during this architecture decision.
 - [ ] **Rule bot scenario tests:** one deterministic test for each decision
   category listed above, plus a regression replay corpus for previously fixed
   mistakes.
-- [ ] **Model compatibility tests:** V5 checkpoint loads only into V5; V6 must
-  fail clearly when given a V5 checkpoint rather than padding/truncating data.
+- [ ] **Model compatibility tests:** A synthetic 1,000-action rejection test
+  exists. Extend it to load one real frozen V5 and one real V6 archive end to
+  end, verifying both valid same-version loads and clear cross-version failures.
 - [ ] **Native engine RNG:** expose a seed API in the CG wrapper if possible.
   Until then, report evaluations as repeated stochastic estimates, not exact
   paired-seed experiments.
 
 ### Definition of done for the next model generation
 
-- A versioned validation league and a separate final holdout exist.
+- No sampled masked action is rejected in long rollouts from either learner
+  perspective, including pending multi-selection states.
+- The native encoder has automated parity tests plus a safe Python fallback, and
+  a clean Kaggle/Linux environment imports and runs it from declared
+  dependencies.
+- Fresh V6 training, validation and final-holdout manifests are disjoint,
+  versioned and reference frozen model hashes.
+- All 16 factory targets are complete and independently smoke-tested.
 - The rule bot has a scenario suite and benchmark matrix.
-- The three fine-tune arms have completed with 100-game/opponent validation.
+- The three V6 fine-tune arms have completed with 100-game/opponent validation.
 - One champion has passed the promotion gate and remains stable in arena matches.
 - A final-holdout report is produced once, after all selection decisions.
-- V6 action/observation migration has an explicit compatibility test and an
-  ablation result before replacing V5 as the default architecture.
+- V6 has real archived-checkpoint compatibility, option-overflow and hidden-
+  information tests before replacing V5 as the default architecture.

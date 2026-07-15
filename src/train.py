@@ -73,6 +73,10 @@ class RewardBreakdownCallback(BaseCallback):
                 if any(v != 0.0 for v in recent_values):
                     mean_val = sum(recent_values) / len(recent_values)
                     self.logger.record(f"rewards/{key}", mean_val)
+        if hasattr(self.model, "ep_info_buffer") and len(self.model.ep_info_buffer) > 0:
+            ep_rewards = [ep_info["r"] for ep_info in self.model.ep_info_buffer]
+            self.logger.record("rollout/ep_rew_max", max(ep_rewards))
+            self.logger.record("rollout/ep_rew_min", min(ep_rewards))
 
 from stable_baselines3.common.monitor import Monitor
 from src.env_wrapper import LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE, PokemonTCGEnv
@@ -147,6 +151,7 @@ def make_env(
     opponent_pool=None,
     rotate_perspective=False,
     action_space_size=LEGACY_ACTION_SPACE_SIZE,
+    structured_v2=True,
 ):
     def _init():
         import torch
@@ -161,11 +166,20 @@ def make_env(
             opponent_pool=opponent_pool,
             rotate_perspective=rotate_perspective,
             action_space_size=action_space_size,
+            structured_v2=structured_v2,
         )
         return Monitor(env)
     return _init
 
 def train():
+    if os.path.exists("stop_factory"):
+        print("Stop file 'stop_factory' detected. Deleting 'stop_factory' and exiting with code 1 to terminate opponent factory...")
+        try:
+            os.remove("stop_factory")
+        except Exception:
+            pass
+        sys.exit(1)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--deck", type=str, required=True, help="Path to deck.csv")
     parser.add_argument("--model-name", type=str, required=True, help="Name of the model to save")
@@ -210,6 +224,11 @@ def train():
         help="Encode every card ID once per feature-extractor forward and reuse it by lookup.",
     )
     parser.add_argument(
+        "--scalar-obs",
+        action="store_true",
+        help="Use the fast 1D scalar observation space instead of the structured V2 dict space.",
+    )
+    parser.add_argument(
         "--reserved-opponents", action="append", default=[],
         help="Opponent manifest reserved for validation/final evaluation; training overlap is rejected.",
     )
@@ -245,6 +264,7 @@ def train():
             opponent_pool=opponent_pool,
             rotate_perspective=args.rotate_perspective,
             action_space_size=action_space_size,
+            structured_v2=not args.scalar_obs,
         )
         for _ in range(args.num_envs)
     ])

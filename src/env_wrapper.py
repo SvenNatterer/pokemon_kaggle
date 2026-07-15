@@ -1,9 +1,11 @@
 import gymnasium as gym
 from gymnasium import spaces
+import ctypes
 import numpy as np
 import os
 
 from src.cg.game import battle_start, battle_select, battle_finish
+from src.cg.sim import Battle, V6ObservationBuffer, lib
 from src.cg.api import AreaType, OptionType, SelectContext, to_observation_class, Observation, all_card_data, all_attack, CardType, LogType
 
 RESULT_REASON_PRIZE = 1
@@ -195,6 +197,7 @@ class PokemonTCGEnv(gym.Env):
         learner_perspective=0,
         rotate_perspective=False,
         action_space_size=LEGACY_ACTION_SPACE_SIZE,
+        structured_v2=True,
     ):
         super().__init__()
         self.learner_perspective = learner_perspective
@@ -219,6 +222,7 @@ class PokemonTCGEnv(gym.Env):
         self.opponent_pending_selection = []
         self.max_option_count_seen = 0
         self.option_overflow_count = 0
+        self.engine_error_count = 0
         self.sparse_rewards = sparse_rewards
         self.reward_config = DEFAULT_REWARD_CONFIG.copy()
         if reward_config:
@@ -277,69 +281,77 @@ class PokemonTCGEnv(gym.Env):
         # options to new policies.
         self.vector_dim = 1500
         self.aux_dim = 2000
-        self.observation_space = spaces.Dict({
+        self.structured_v2 = structured_v2
+        
+        base_spaces = {
             "vector": spaces.Box(low=-2000, high=2000, shape=(self.vector_dim,), dtype=np.float32),
             "action_mask": spaces.Box(low=0, high=1, shape=(self.max_options,), dtype=np.int8),
             "aux_target": spaces.Box(low=0, high=1, shape=(self.aux_dim,), dtype=np.float32),
-            "entity_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(ENTITY_SLOTS,), dtype=np.int32),
-            "entity_features": spaces.Box(
-                low=-1, high=10, shape=(ENTITY_SLOTS, ENTITY_FEATURE_DIM), dtype=np.float32
-            ),
-            "entity_tool_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(ENTITY_SLOTS,), dtype=np.int32),
-            "entity_pre_evolution_ids": spaces.Box(
-                low=0,
-                high=MAX_CARD_ID,
-                shape=(ENTITY_SLOTS, MAX_ENTITY_PRE_EVOLUTIONS),
-                dtype=np.int32,
-            ),
-            "entity_energy_card_ids": spaces.Box(
-                low=0,
-                high=MAX_CARD_ID,
-                shape=(ENTITY_SLOTS, MAX_ENTITY_ENERGY_CARDS),
-                dtype=np.int32,
-            ),
-            "hand_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(HAND_CARD_SLOTS,), dtype=np.int32),
-            "discard_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(2, DISCARD_CARD_SLOTS), dtype=np.int32
-            ),
-            "revealed_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(REVEALED_CARD_SLOTS,), dtype=np.int32
-            ),
-            "prize_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(2, PRIZE_CARD_SLOTS), dtype=np.int32
-            ),
-            "search_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(SEARCH_CARD_SLOTS,), dtype=np.int32
-            ),
-            "looking_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(LOOKING_CARD_SLOTS,), dtype=np.int32
-            ),
-            "own_deck_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(DECK_LIST_SLOTS,), dtype=np.int32
-            ),
-            "context_card_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(CONTEXT_CARD_SLOTS + 1,), dtype=np.int32
-            ),
-            "log_card_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(LOG_CARD_SLOTS,), dtype=np.int32),
-            "option_card_ids": spaces.Box(
-                low=0, high=MAX_CARD_ID, shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
-            ),
-            "option_attack_ids": spaces.Box(
-                low=0, high=MAX_ATTACK_ID, shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
-            ),
-            "option_types": spaces.Box(
-                low=0, high=len(OptionType), shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
-            ),
-            "option_areas": spaces.Box(
-                low=0, high=len(AreaType), shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
-            ),
-            "option_features": spaces.Box(
-                low=-1,
-                high=10,
-                shape=(MAX_ENCODED_OPTIONS, OPTION_FEATURE_DIM),
-                dtype=np.float32,
-            ),
-        })
+        }
+        
+        if self.structured_v2:
+            base_spaces.update({
+                "entity_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(ENTITY_SLOTS,), dtype=np.int32),
+                "entity_features": spaces.Box(
+                    low=-1, high=10, shape=(ENTITY_SLOTS, ENTITY_FEATURE_DIM), dtype=np.float32
+                ),
+                "entity_tool_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(ENTITY_SLOTS,), dtype=np.int32),
+                "entity_pre_evolution_ids": spaces.Box(
+                    low=0,
+                    high=MAX_CARD_ID,
+                    shape=(ENTITY_SLOTS, MAX_ENTITY_PRE_EVOLUTIONS),
+                    dtype=np.int32,
+                ),
+                "entity_energy_card_ids": spaces.Box(
+                    low=0,
+                    high=MAX_CARD_ID,
+                    shape=(ENTITY_SLOTS, MAX_ENTITY_ENERGY_CARDS),
+                    dtype=np.int32,
+                ),
+                "hand_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(HAND_CARD_SLOTS,), dtype=np.int32),
+                "discard_ids": spaces.Box(
+                    low=0, high=MAX_CARD_ID, shape=(2, DISCARD_CARD_SLOTS), dtype=np.int32
+                ),
+                "revealed_ids": spaces.Box(
+                    low=0, high=MAX_CARD_ID, shape=(REVEALED_CARD_SLOTS,), dtype=np.int32
+                ),
+                "prize_ids": spaces.Box(
+                    low=0, high=MAX_CARD_ID, shape=(2, PRIZE_CARD_SLOTS), dtype=np.int32
+                ),
+                "search_ids": spaces.Box(
+                    low=0, high=MAX_CARD_ID, shape=(SEARCH_CARD_SLOTS,), dtype=np.int32
+                ),
+                "looking_ids": spaces.Box(
+                    low=0, high=MAX_CARD_ID, shape=(LOOKING_CARD_SLOTS,), dtype=np.int32
+                ),
+                "own_deck_ids": spaces.Box(
+                    low=0, high=MAX_CARD_ID, shape=(DECK_LIST_SLOTS,), dtype=np.int32
+                ),
+                "context_card_ids": spaces.Box(
+                    low=0, high=MAX_CARD_ID, shape=(CONTEXT_CARD_SLOTS + 1,), dtype=np.int32
+                ),
+                "log_card_ids": spaces.Box(low=0, high=MAX_CARD_ID, shape=(LOG_CARD_SLOTS,), dtype=np.int32),
+                "option_card_ids": spaces.Box(
+                    low=0, high=MAX_CARD_ID, shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
+                ),
+                "option_attack_ids": spaces.Box(
+                    low=0, high=MAX_ATTACK_ID, shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
+                ),
+                "option_types": spaces.Box(
+                    low=0, high=len(OptionType), shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
+                ),
+                "option_areas": spaces.Box(
+                    low=0, high=len(AreaType), shape=(MAX_ENCODED_OPTIONS,), dtype=np.int32
+                ),
+                "option_features": spaces.Box(
+                    low=-1,
+                    high=10,
+                    shape=(MAX_ENCODED_OPTIONS, OPTION_FEATURE_DIM),
+                    dtype=np.float32,
+                ),
+            })
+            
+        self.observation_space = spaces.Dict(base_spaces)
         
         self.reward_keys = [
             "step_penalty", "invalid_action", "attack_bonus", "end_turn",
@@ -437,7 +449,51 @@ class PokemonTCGEnv(gym.Env):
         
         return self._get_obs(perspective=self.learner_perspective), self._get_info()
 
+    @staticmethod
+    def _is_native_engine_error(error):
+        message = str(error)
+        return (
+            "inside the C++ engine" in message
+            or "GetV6Observation failed" in message
+        )
+
+    def _truncate_native_engine_error(self, error):
+        """Discard one corrupted native game without killing its vector worker."""
+        self.engine_error_count += 1
+        try:
+            terminal_observation = self._get_obs_python(
+                perspective=self.learner_perspective,
+                pending_selection=self.pending_selection,
+            )
+        except Exception:
+            terminal_observation = {
+                key: np.zeros(space.shape, dtype=space.dtype)
+                for key, space in self.observation_space.spaces.items()
+            }
+
+        info = self._get_info()
+        info["engine_error"] = str(error)
+        info["engine_error_count"] = self.engine_error_count
+        try:
+            if self.current_obs_dict is not None:
+                battle_finish()
+        finally:
+            self.current_obs_dict = None
+            self.pending_selection = []
+            self.opponent_pending_selection = []
+            self.opponent_lstm_state = None
+            self.opponent_episode_start = True
+        return terminal_observation, 0.0, False, True, info
+
     def step(self, action):
+        try:
+            return self._step_impl(action)
+        except RuntimeError as error:
+            if not self._is_native_engine_error(error):
+                raise
+            return self._truncate_native_engine_error(error)
+
+    def _step_impl(self, action):
         action = int(action) # Convert numpy scalar to python int
         old_obs = to_observation_class(self.current_obs_dict)
 
@@ -642,10 +698,17 @@ class PokemonTCGEnv(gym.Env):
                 if opponent_action_size not in {LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE}:
                     opponent_action_size = self.max_options
                 opponent_stop_action = opponent_action_size - 1
+                opponent_space = getattr(self.opponent_model, "observation_space", None)
+                opponent_uses_structured = False
+                if opponent_space is not None and isinstance(opponent_space, spaces.Dict):
+                    required_v2_keys = {"entity_ids", "entity_features", "option_card_ids", "option_attack_ids", "option_features"}
+                    opponent_uses_structured = required_v2_keys.issubset(opponent_space.spaces)
+
                 opponent_obs = self._get_obs(
                     perspective=1 - self.learner_perspective,
                     pending_selection=self.opponent_pending_selection,
                     action_space_size=opponent_action_size,
+                    force_structured=opponent_uses_structured,
                 )
                 
                 # Expand dims to match what stable-baselines expects
@@ -998,7 +1061,11 @@ class PokemonTCGEnv(gym.Env):
             search_ids[index] = _bounded_id(card, MAX_CARD_ID)
         for index, card in enumerate(looking[:LOOKING_CARD_SLOTS]):
             looking_ids[index] = _bounded_id(card, MAX_CARD_ID)
-        own_source_deck = self.my_deck if perspective == 0 else self.opponent_deck
+        own_source_deck = (
+            self.my_deck
+            if perspective == self.learner_perspective
+            else self.opponent_deck
+        )
         for index, card_id in enumerate(own_source_deck[:DECK_LIST_SLOTS]):
             own_deck_ids[index] = _bounded_id(card_id, MAX_CARD_ID)
         context_card_ids[0] = _bounded_id(getattr(obs.select, "contextCard", None), MAX_CARD_ID)
@@ -1081,7 +1148,101 @@ class PokemonTCGEnv(gym.Env):
             "option_features": option_features,
         }
 
-    def _get_obs(self, perspective=0, pending_selection=None, action_space_size=None):
+    @staticmethod
+    def _copy_cpp_array(value, dtype, shape=None):
+        array = np.ctypeslib.as_array(value).astype(dtype, copy=True)
+        return array.reshape(shape) if shape is not None else array
+
+    def _get_obs_cpp(self, perspective=0, pending_selection=None, action_space_size=None, force_structured=None):
+        if pending_selection is None:
+            pending_selection = self.pending_selection if perspective == 0 else self.opponent_pending_selection
+        pending_selection = list(pending_selection or [])
+        output_size = int(action_space_size or self.max_options)
+        if output_size not in {LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE}:
+            raise ValueError(f"Unsupported observation action-mask size: {output_size}")
+
+        pending_array = None
+        if pending_selection:
+            pending_array = (ctypes.c_int * len(pending_selection))(*pending_selection)
+        buffer = V6ObservationBuffer()
+        error_code = lib.GetV6Observation(
+            Battle.battle_ptr,
+            int(perspective),
+            pending_array,
+            len(pending_selection),
+            ctypes.byref(buffer),
+        )
+        if error_code != 0:
+            raise RuntimeError(f"GetV6Observation failed with engine error {error_code}")
+
+        cpp_mask = self._copy_cpp_array(buffer.action_mask, np.int8)
+        if output_size == V6_ACTION_SPACE_SIZE:
+            action_mask = cpp_mask
+        else:
+            action_mask = np.zeros(output_size, dtype=np.int8)
+            action_mask[:MAX_ENCODED_OPTIONS] = cpp_mask[:MAX_ENCODED_OPTIONS]
+            action_mask[output_size - 1] = cpp_mask[V6_STOP_ACTION]
+
+        obs = to_observation_class(self.current_obs_dict)
+        if obs.select and obs.select.option:
+            raw_option_count = len(obs.select.option)
+            self.max_option_count_seen = max(self.max_option_count_seen, raw_option_count)
+            if raw_option_count > MAX_ENCODED_OPTIONS:
+                self.option_overflow_count += 1
+
+        result = {
+            "vector": self._copy_cpp_array(buffer.vector, np.float32),
+            "action_mask": action_mask,
+            "aux_target": self._copy_cpp_array(buffer.aux_target, np.float32),
+        }
+        use_structured = self.structured_v2 if force_structured is None else force_structured
+        if use_structured:
+            result.update({
+                "entity_ids": self._copy_cpp_array(buffer.entity_ids, np.int32),
+                "entity_features": self._copy_cpp_array(
+                    buffer.entity_features, np.float32, (ENTITY_SLOTS, ENTITY_FEATURE_DIM)
+                ),
+                "entity_tool_ids": self._copy_cpp_array(buffer.entity_tool_ids, np.int32),
+                "entity_pre_evolution_ids": self._copy_cpp_array(
+                    buffer.entity_pre_evolution_ids,
+                    np.int32,
+                    (ENTITY_SLOTS, MAX_ENTITY_PRE_EVOLUTIONS),
+                ),
+                "entity_energy_card_ids": self._copy_cpp_array(
+                    buffer.entity_energy_card_ids,
+                    np.int32,
+                    (ENTITY_SLOTS, MAX_ENTITY_ENERGY_CARDS),
+                ),
+                "hand_ids": self._copy_cpp_array(buffer.hand_ids, np.int32),
+                "discard_ids": self._copy_cpp_array(
+                    buffer.discard_ids, np.int32, (2, DISCARD_CARD_SLOTS)
+                ),
+                "revealed_ids": self._copy_cpp_array(buffer.revealed_ids, np.int32),
+                "prize_ids": self._copy_cpp_array(buffer.prize_ids, np.int32, (2, PRIZE_CARD_SLOTS)),
+                "search_ids": self._copy_cpp_array(buffer.search_ids, np.int32),
+                "looking_ids": self._copy_cpp_array(buffer.looking_ids, np.int32),
+                "own_deck_ids": self._copy_cpp_array(buffer.own_deck_ids, np.int32),
+                "context_card_ids": self._copy_cpp_array(buffer.context_card_ids, np.int32),
+                "log_card_ids": self._copy_cpp_array(buffer.log_card_ids, np.int32),
+                "option_card_ids": self._copy_cpp_array(buffer.option_card_ids, np.int32),
+                "option_attack_ids": self._copy_cpp_array(buffer.option_attack_ids, np.int32),
+                "option_types": self._copy_cpp_array(buffer.option_types, np.int32),
+                "option_areas": self._copy_cpp_array(buffer.option_areas, np.int32),
+                "option_features": self._copy_cpp_array(
+                    buffer.option_features, np.float32, (MAX_ENCODED_OPTIONS, OPTION_FEATURE_DIM)
+                ),
+            })
+        return result
+
+    def _get_obs(self, perspective=0, pending_selection=None, action_space_size=None, force_structured=None):
+        return self._get_obs_cpp(
+            perspective=perspective,
+            pending_selection=pending_selection,
+            action_space_size=action_space_size,
+            force_structured=force_structured,
+        )
+
+    def _get_obs_python(self, perspective=0, pending_selection=None, action_space_size=None, force_structured=None):
         obs = to_observation_class(self.current_obs_dict)
         if pending_selection is None:
             pending_selection = self.pending_selection if perspective == 0 else self.opponent_pending_selection
@@ -1308,7 +1469,11 @@ class PokemonTCGEnv(gym.Env):
         # Auxiliary target: predict how many copies of each card remain hidden.
         # Log scaling distinguishes ordinary 1-4 copy cards while still
         # representing decks with many copies of a basic Energy.
-        hidden_deck = self.opponent_deck if perspective == 0 else self.my_deck
+        hidden_deck = (
+            self.opponent_deck
+            if perspective == self.learner_perspective
+            else self.my_deck
+        )
         hidden_player_index = 1 - perspective
         hidden_counts = {}
         for card_id in hidden_deck:
@@ -1339,8 +1504,12 @@ class PokemonTCGEnv(gym.Env):
             if card_id < 2000 and count > 0:
                 aux_target[card_id] = encode_hidden_card_count(count)
                 
-        structured = self._structured_observation(obs, perspective, pending_selection)
-        return {"vector": vec, "action_mask": mask, "aux_target": aux_target, **structured}
+        use_structured = self.structured_v2 if force_structured is None else force_structured
+        if use_structured:
+            structured = self._structured_observation(obs, perspective, pending_selection)
+            return {"vector": vec, "action_mask": mask, "aux_target": aux_target, **structured}
+        else:
+            return {"vector": vec, "action_mask": mask, "aux_target": aux_target}
         
     def _get_info(self):
         info = {
@@ -1348,6 +1517,7 @@ class PokemonTCGEnv(gym.Env):
             "action_space_size": self.max_options,
             "max_option_count_seen": self.max_option_count_seen,
             "option_overflow_count": self.option_overflow_count,
+            "engine_error_count": self.engine_error_count,
         }
         try:
             obs = to_observation_class(self.current_obs_dict)

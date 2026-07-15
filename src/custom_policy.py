@@ -357,6 +357,10 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         # Experimental, opt-in path used by the card-table benchmark. Keeping
         # this disabled preserves existing checkpoint behaviour and timings.
         self.use_card_table = bool(use_card_table)
+        # A policy forward immediately consumes the option embeddings produced
+        # by this extractor. Reusing them avoids encoding every option twice.
+        # This is transient autograd state and must never enter checkpoints.
+        self._option_embedding_cache = None
         
         vector_dim = observation_space.spaces['vector'].shape[0]
         required_v2_keys = {
@@ -562,7 +566,14 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             )
         )
 
+    def take_option_embedding_cache(self):
+        """Return and clear option embeddings from the latest extractor forward."""
+        cached = self._option_embedding_cache
+        self._option_embedding_cache = None
+        return cached
+
     def forward(self, observations):
+        self._option_embedding_cache = None
         if not self.structured_v2:
             return self.net(observations['vector'])
 
@@ -610,6 +621,7 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         ).flatten(start_dim=-2)
 
         options = self.encode_options(observations, card_table)
+        self._option_embedding_cache = options
         option_present = observations["action_mask"][..., :MAX_ENCODED_OPTIONS] > 0
         option_mean = self._masked_mean(options, option_present.long())
         option_max = options.masked_fill(~option_present.unsqueeze(-1), -1e9).max(dim=-2).values

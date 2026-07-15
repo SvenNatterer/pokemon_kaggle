@@ -46,12 +46,22 @@ def load_bot(model_path: str | None, env=None):
         attempts = ({"env": env}, {}) if env is not None else ({},)
         for kwargs in attempts:
             try:
-                return loader.load(path, **kwargs)
+                bot = loader.load(path, **kwargs)
+                if hasattr(bot, "policy") and hasattr(bot.policy, "features_extractor"):
+                    extractor = bot.policy.features_extractor
+                    if hasattr(extractor, "use_card_table"):
+                        extractor.use_card_table = True
+                return bot
             except Exception as exc:
                 suffix = " with env" if kwargs else ""
                 errors.append(f"{loader.__name__}{suffix}: {exc}")
         try:
-            return _load_legacy_structured_model(loader, path)
+            bot = _load_legacy_structured_model(loader, path)
+            if hasattr(bot, "policy") and hasattr(bot.policy, "features_extractor"):
+                extractor = bot.policy.features_extractor
+                if hasattr(extractor, "use_card_table"):
+                    extractor.use_card_table = True
+            return bot
         except Exception as exc:
             errors.append(f"{loader.__name__} legacy structured: {exc}")
     raise RuntimeError(f"could not load bot {model_path}: {'; '.join(errors)}")

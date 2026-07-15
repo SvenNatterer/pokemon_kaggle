@@ -5,11 +5,11 @@
   "defaults": {
     "num_envs": 8,
     "n_steps": 2048,
-    "batch_size": 2048,
+    "batch_size": 1024,
     "n_epochs": 1,
     "base_steps": 1000000,
     "finetune_steps": 400000,
-    "learning_rate": 0.0001,
+    "learning_rate": 0.00003,
     "entropy_coefficient": 0.008,
     "clip_range": 0.12,
     "target_kl": 0.03,
@@ -25,33 +25,33 @@
     "maximum_perspective_gap": 0.20,
     "minimum_passing_bases": 3,
     "selected_base_count": 3,
-    "results_file": "logs/opponent_factory_v6/base_evaluation.json",
-    "selection_file": "logs/opponent_factory_v6/base_selection.json"
+    "results_file": "logs/opponent_factory_v5b/base_evaluation.json",
+    "selection_file": "logs/opponent_factory_v5b/base_selection.json"
   },
   "bases": [
     {
       "id": "base_a",
       "seed": 20260721,
       "deck_path": "decks/deck_bank/bank_54.csv",
-      "model_path": "models/foundation/ppo_v6_deck_bank_54_base_a.zip"
+      "model_path": "models/foundation/ppo_v5b_deck_bank_54_base_a.zip"
     },
     {
       "id": "base_b",
       "seed": 20260722,
       "deck_path": "decks/deck_bank/bank_55.csv",
-      "model_path": "models/foundation/ppo_v6_deck_bank_55_base_b.zip"
+      "model_path": "models/foundation/ppo_v5b_deck_bank_55_base_b.zip"
     },
     {
       "id": "base_c",
       "seed": 20260723,
       "deck_path": "decks/deck_bank/bank_56.csv",
-      "model_path": "models/foundation/ppo_v6_deck_bank_56_base_c.zip"
+      "model_path": "models/foundation/ppo_v5b_deck_bank_56_base_c.zip"
     },
     {
       "id": "base_d",
       "seed": 20260724,
       "deck_path": "decks/deck_bank/bank_65.csv",
-      "model_path": "models/foundation/ppo_v6_deck_bank_65_base_d.zip"
+      "model_path": "models/foundation/ppo_v5b_deck_bank_65_base_d.zip"
     }
   ],
   "fallback_bases": [
@@ -59,13 +59,13 @@
       "id": "base_e",
       "seed": 20260725,
       "deck_path": "decks/deck_bank/bank_62.csv",
-      "model_path": "models/foundation/ppo_v6_deck_bank_62_base_e.zip"
+      "model_path": "models/foundation/ppo_v5b_deck_bank_62_base_e.zip"
     },
     {
       "id": "base_f",
       "seed": 20260726,
       "deck_path": "decks/deck_bank/bank_64.csv",
-      "model_path": "models/foundation/ppo_v6_deck_bank_64_base_f.zip"
+      "model_path": "models/foundation/ppo_v5b_deck_bank_64_base_f.zip"
     }
   ],
   "targets": [

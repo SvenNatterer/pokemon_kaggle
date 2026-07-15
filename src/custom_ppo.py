@@ -82,7 +82,9 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         """Score encoded legal options with shared weights, then apply legality."""
         logits = self.action_net(actor_latent)
         if self.structured_options:
-            option_embeddings = self.features_extractor.encode_options(obs)
+            option_embeddings = self.features_extractor.take_option_embedding_cache()
+            if option_embeddings is None:
+                option_embeddings = self.features_extractor.encode_options(obs)
             option_count = option_embeddings.shape[-2]
             expanded_state = actor_latent.unsqueeze(-2).expand(
                 *actor_latent.shape[:-1], option_count, actor_latent.shape[-1]
@@ -161,7 +163,9 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
             
         return self.action_dist.proba_distribution(action_logits=mean_actions), lstm_states_pi
 
-    def evaluate_actions_with_aux(self, obs, actions, lstm_states, episode_starts):
+    def evaluate_actions_with_aux(
+        self, obs, actions, lstm_states, episode_starts, compute_aux=True
+    ):
         """
         Evaluate actions and also return auxiliary logits.
         We have to re-implement parts of evaluate_actions to get the shared features.
@@ -185,8 +189,10 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         entropy = distribution.entropy()
         
         # Auxiliary Head: with belief actor enabled, the supervised belief embedding is also fed to the actor.
-        aux_input = belief_embedding if self.use_belief_actor else latent_pi
-        aux_logits = self.aux_head(aux_input)
+        aux_logits = None
+        if compute_aux:
+            aux_input = belief_embedding if self.use_belief_actor else latent_pi
+            aux_logits = self.aux_head(aux_input)
         
         return values, log_prob, entropy, aux_logits
 
@@ -239,6 +245,7 @@ class CustomPPO(RecurrentPPO):
                     actions,
                     rollout_data.lstm_states,
                     rollout_data.episode_starts,
+                    compute_aux=self.c_aux != 0.0,
                 )
                 
                 values = values.flatten()
@@ -284,43 +291,52 @@ class CustomPPO(RecurrentPPO):
 
                 entropy_losses.append(entropy_loss.item())
 
-                # Count-aware hidden-card loss. Targets are log-scaled to [0, 1].
-                aux_target = rollout_data.observations['aux_target']
-                valid_aux_logits = aux_logits[mask]
-                valid_aux_target = aux_target[mask]
-                present_mask = valid_aux_target > 0
-                positive_count = present_mask.sum()
-                negative_count = valid_aux_target.numel() - positive_count
-                positive_weight = torch.clamp(
-                    negative_count / torch.clamp(positive_count, min=1.0),
-                    min=1.0,
-                    max=20.0,
-                )
-                aux_prediction = torch.sigmoid(valid_aux_logits)
-                aux_element_loss = F.smooth_l1_loss(
-                    aux_prediction, valid_aux_target, reduction="none", beta=0.1
-                )
-                aux_weights = torch.where(
-                    present_mask,
-                    positive_weight,
-                    torch.ones_like(valid_aux_target),
-                )
-                aux_loss = (aux_element_loss * aux_weights).sum() / aux_weights.sum().clamp_min(1.0)
-                aux_losses.append(aux_loss.item())
+                aux_loss = None
+                if aux_logits is not None:
+                    # Count-aware hidden-card loss. Targets are log-scaled to [0, 1].
+                    aux_target = rollout_data.observations['aux_target']
+                    valid_aux_logits = aux_logits[mask]
+                    valid_aux_target = aux_target[mask]
+                    present_mask = valid_aux_target > 0
+                    positive_count = present_mask.sum()
+                    negative_count = valid_aux_target.numel() - positive_count
+                    positive_weight = torch.clamp(
+                        negative_count / torch.clamp(positive_count, min=1.0),
+                        min=1.0,
+                        max=20.0,
+                    )
+                    aux_prediction = torch.sigmoid(valid_aux_logits)
+                    aux_element_loss = F.smooth_l1_loss(
+                        aux_prediction, valid_aux_target, reduction="none", beta=0.1
+                    )
+                    aux_weights = torch.where(
+                        present_mask,
+                        positive_weight,
+                        torch.ones_like(valid_aux_target),
+                    )
+                    aux_loss = (
+                        (aux_element_loss * aux_weights).sum()
+                        / aux_weights.sum().clamp_min(1.0)
+                    )
+                    aux_losses.append(aux_loss.item())
 
-                with torch.no_grad():
-                    top_k = min(20, valid_aux_logits.shape[-1])
-                    top_indices = torch.topk(valid_aux_logits, k=top_k, dim=-1).indices
-                    top_hits = torch.gather(present_mask, 1, top_indices).sum(dim=1)
-                    aux_precision_at_20.append((top_hits / top_k).mean().item())
-                    positives_per_step = present_mask.sum(dim=1).clamp_min(1.0)
-                    aux_recall_at_20.append((top_hits / positives_per_step).mean().item())
-                    if present_mask.any():
-                        aux_count_scaled_mae.append(
-                            torch.abs(aux_prediction[present_mask] - valid_aux_target[present_mask]).mean().item()
-                        )
+                    with torch.no_grad():
+                        top_k = min(20, valid_aux_logits.shape[-1])
+                        top_indices = torch.topk(valid_aux_logits, k=top_k, dim=-1).indices
+                        top_hits = torch.gather(present_mask, 1, top_indices).sum(dim=1)
+                        aux_precision_at_20.append((top_hits / top_k).mean().item())
+                        positives_per_step = present_mask.sum(dim=1).clamp_min(1.0)
+                        aux_recall_at_20.append((top_hits / positives_per_step).mean().item())
+                        if present_mask.any():
+                            aux_count_scaled_mae.append(
+                                torch.abs(
+                                    aux_prediction[present_mask] - valid_aux_target[present_mask]
+                                ).mean().item()
+                            )
 
-                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss + self.c_aux * aux_loss
+                loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
+                if aux_loss is not None:
+                    loss = loss + self.c_aux * aux_loss
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -354,9 +370,15 @@ class CustomPPO(RecurrentPPO):
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
-        self.logger.record("train/aux_loss", np.mean(aux_losses))
-        self.logger.record("train/aux_precision_at_20", np.mean(aux_precision_at_20))
-        self.logger.record("train/aux_recall_at_20", np.mean(aux_recall_at_20))
+        self.logger.record("train/aux_loss", np.mean(aux_losses) if aux_losses else 0.0)
+        self.logger.record(
+            "train/aux_precision_at_20",
+            np.mean(aux_precision_at_20) if aux_precision_at_20 else 0.0,
+        )
+        self.logger.record(
+            "train/aux_recall_at_20",
+            np.mean(aux_recall_at_20) if aux_recall_at_20 else 0.0,
+        )
         self.logger.record(
             "train/aux_count_scaled_mae",
             np.mean(aux_count_scaled_mae) if aux_count_scaled_mae else 0.0,

@@ -1,5 +1,7 @@
 import ctypes
 import json
+import orjson
+
 
 from .sim import Battle, StartData, lib
 
@@ -11,7 +13,9 @@ def _get_battle_data() -> dict:
         dict: Current observation.
     """
     sd = lib.GetBattleData(Battle.battle_ptr)
-    Battle.obs = json.loads(sd.json.decode())
+    if not sd.json:
+        raise RuntimeError("GetBattleData failed inside the C++ engine; see the preceding [ptcg] error")
+    Battle.obs = orjson.loads(sd.json)
     Battle.obs["search_begin_input"] = ctypes.string_at(sd.data, sd.count).decode("ascii")
     return Battle.obs
 
@@ -62,7 +66,7 @@ def battle_select(select_list: list[int]) -> dict:
         if err == 30:
             raise ValueError("battle_ptr broken.")
         else:
-            raise IndexError()
+            raise RuntimeError(f"Select failed inside the C++ engine with error {err}")
     return _get_battle_data()
 
 
