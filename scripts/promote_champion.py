@@ -19,7 +19,13 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     selection = json.loads(Path(args.selection).read_text(encoding="utf-8"))
+    if (selection.get("candidate_spec") or {}).get("bot_type") == "rule_based":
+        raise SystemExit("Rejected: rule-based bots cannot replace the PPO champion")
     candidate = selection["summary"]
+    health_gate = candidate.get("health_gate") or {}
+    if health_gate.get("passed") is not True:
+        violations = ", ".join(health_gate.get("violations") or ["health data missing"])
+        raise SystemExit(f"Rejected: evaluation health gate failed ({violations})")
     if candidate.get("perspective_score_gap", 0.0) > args.max_perspective_gap:
         raise SystemExit("Rejected: perspective gap exceeds gate")
     champion_path = Path(args.champion_file)

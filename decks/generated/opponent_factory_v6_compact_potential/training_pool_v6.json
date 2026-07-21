@@ -1,0 +1,26 @@
+[
+  {
+    "deck": "decks/deck_bank/bank_33.csv",
+    "label": "ppo_v6_compact_c_bank_33",
+    "model": "models/training_v6/ppo_v6_deck_bank_33_compact_c.zip",
+    "weight": 1.0
+  },
+  {
+    "deck": "decks/deck_bank/bank_38.csv",
+    "label": "ppo_v6_compact_a_bank_38",
+    "model": "models/training_v6/ppo_v6_deck_bank_38_compact_a.zip",
+    "weight": 1.0
+  },
+  {
+    "deck": "decks/deck_bank/bank_61.csv",
+    "label": "ppo_v6_compact_c_bank_61",
+    "model": "models/training_v6/ppo_v6_deck_bank_61_compact_c.zip",
+    "weight": 1.0
+  },
+  {
+    "deck": "decks/deck_bank/bank_24.csv",
+    "label": "ppo_v6_compact_a_bank_24",
+    "model": "models/training_v6/ppo_v6_deck_bank_24_compact_a.zip",
+    "weight": 1.0
+  }
+]

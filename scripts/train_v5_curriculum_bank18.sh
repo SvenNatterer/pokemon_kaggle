@@ -260,7 +260,6 @@ run_stage() {
   local ent="$8"
   local clip="$9"
   local kl="${10}"
-  local sparse="${11}"
 
   if ! should_run_stage "$stage"; then
     echo "Skipping stage ${stage}: ${label}"
@@ -302,6 +301,9 @@ run_stage() {
     --model-name "$MODEL"
     --opp-deck "$opp_deck"
     --timesteps "$steps"
+    --policy-version v5
+    --feature-variant full
+    --no-card-table
     --num-envs "$NUM_ENVS"
     --n-steps "$N_STEPS"
     --batch-size "$BATCH_SIZE"
@@ -318,7 +320,6 @@ run_stage() {
 
   [ -z "$opp_model" ] || cmd+=(--opp-model "$opp_model")
   [ -z "$pool" ] || cmd+=(--opp-pool "$pool")
-  [ "$sparse" = "0" ] || cmd+=(--sparse-rewards)
   [ ! -f "$MODEL_ZIP" ] || cmd+=(--continue-existing)
 
   echo
@@ -327,7 +328,6 @@ run_stage() {
   echo "Opponent: ${opp_model:-${pool:-random legal policy}}"
   echo "Opponent deck: ${opp_deck}"
   echo "lr=${lr} ent=${ent} clip=${clip} target_kl=${kl}"
-  echo "sparse=${sparse}"
   echo "============================================================"
 
   printf ' %q' "${cmd[@]}"
@@ -395,8 +395,7 @@ run_stage 1 "random_mechanics" \
   "3e-4" \
   "0.020" \
   "0.20" \
-  "0.050" \
-  "0"
+  "0.050"
 
 # 2: Warm-up against the weaker bank_47 model.
 run_stage 2 "abra_warmup" \
@@ -407,8 +406,7 @@ run_stage 2 "abra_warmup" \
   "1e-4" \
   "0.015" \
   "0.18" \
-  "0.045" \
-  "0"
+  "0.045"
 
 # 3: Continue against the stronger bank_47 model.
 run_stage 3 "abra_strong" \
@@ -419,8 +417,7 @@ run_stage 3 "abra_strong" \
   "5e-5" \
   "0.010" \
   "0.15" \
-  "0.035" \
-  "0"
+  "0.035"
 
 # 4-6: Distinct archetypes reduce matchup overfitting.
 run_stage 4 "zorua_control" \
@@ -431,8 +428,7 @@ run_stage 4 "zorua_control" \
   "4e-5" \
   "0.010" \
   "0.15" \
-  "0.035" \
-  "0"
+  "0.035"
 
 run_stage 5 "murkrow_disruption" \
   "$STAGE5_STEPS" \
@@ -442,8 +438,7 @@ run_stage 5 "murkrow_disruption" \
   "4e-5" \
   "0.010" \
   "0.15" \
-  "0.035" \
-  "0"
+  "0.035"
 
 run_stage 6 "slowpoke_defensive" \
   "$STAGE6_STEPS" \
@@ -453,8 +448,7 @@ run_stage 6 "slowpoke_defensive" \
   "4e-5" \
   "0.010" \
   "0.15" \
-  "0.035" \
-  "0"
+  "0.035"
 
 # 7: Mix all learned concepts per episode.
 run_stage 7 "mixed_league" \
@@ -465,8 +459,7 @@ run_stage 7 "mixed_league" \
   "3e-5" \
   "0.008" \
   "0.12" \
-  "0.030" \
-  "0"
+  "0.030"
 
 # 8: Frozen self-play prevents the opponent from changing under the learner.
 create_self_snapshot
@@ -479,11 +472,10 @@ run_stage 8 "frozen_self_play" \
   "2e-5" \
   "0.006" \
   "0.10" \
-  "0.025" \
-  "0"
+  "0.025"
 
-# 9: Terminal-only consolidation against the league.
-run_stage 9 "sparse_league_final" \
+# 9: Final low-learning-rate consolidation against the league.
+run_stage 9 "final_league" \
   "$STAGE9_STEPS" \
   "$DECK" \
   "" \
@@ -491,8 +483,7 @@ run_stage 9 "sparse_league_final" \
   "1e-5" \
   "0.004" \
   "0.10" \
-  "0.020" \
-  "1"
+  "0.020"
 
 if [ "$RUN_HOLDOUT_EVAL" = "1" ]; then
   if [ "$DRY_RUN" = "1" ]; then

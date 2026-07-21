@@ -18,7 +18,12 @@ ARGS=(
   --deck "$DECK"
   --model-name "$MODEL_NAME"
   --opp-deck "$OPP_DECK"
-  --endless
+  --timesteps 0
+  --policy-version v5
+  --feature-variant full
+  --no-card-table
+  --no-belief-actor
+  --no-rotate-perspective
   --num-envs "$NUM_ENVS"
   --n-epochs 4
   --clip-range 0.2

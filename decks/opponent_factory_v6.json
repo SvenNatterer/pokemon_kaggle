@@ -3,7 +3,7 @@
   "policy_version": "v6",
   "description": "Four independent compact-action bases; evaluate first, then use the best three for disjoint opponent splits.",
   "defaults": {
-    "num_envs": 8,
+    "num_envs": 7,
     "n_steps": 2048,
     "batch_size": 2048,
     "n_epochs": 1,
@@ -71,20 +71,18 @@
   "targets": [
     {"deck_id": "bank_33", "archetype": "Hop's Trevenant", "split": "training"},
     {"deck_id": "bank_38", "archetype": "Team Rocket's Mewtwo ex", "split": "training"},
-    {"deck_id": "bank_49", "archetype": "Hydrapple ex", "split": "training"},
+    {"deck_id": "bank_49", "archetype": "Hydrapple ex", "split": "validation"},
     {"deck_id": "bank_61", "archetype": "Haxorus", "split": "training"},
-
     {"deck_id": "bank_11", "archetype": "N's Zoroark ex", "split": "validation"},
     {"deck_id": "bank_25", "archetype": "Espeon ex", "split": "validation"},
     {"deck_id": "bank_36", "archetype": "Rillaboom", "split": "validation"},
-    {"deck_id": "bank_57", "archetype": "Team Rocket's Honchkrow", "split": "validation"},
+    {"deck_id": "bank_57", "archetype": "Team Rocket's Honchkrow", "split": "holdout"},
     {"deck_id": "bank_84", "archetype": "Mega Lopunny ex", "split": "validation"},
-    {"deck_id": "bank_2", "archetype": "Metagross", "split": "validation"},
-
+    {"deck_id": "bank_2", "archetype": "Metagross", "split": "holdout"},
     {"deck_id": "bank_99", "archetype": "Arboliva ex", "split": "holdout"},
     {"deck_id": "bank_3", "archetype": "Dragapult ex", "split": "holdout"},
-    {"deck_id": "bank_14", "archetype": "Alakazam", "split": "holdout"},
-    {"deck_id": "bank_24", "archetype": "Mega Kangaskhan ex", "split": "holdout"},
+    {"deck_id": "bank_14", "archetype": "Alakazam", "split": "validation"},
+    {"deck_id": "bank_24", "archetype": "Mega Kangaskhan ex", "split": "training"},
     {"deck_id": "bank_63", "archetype": "Hop's Trevenant", "split": "holdout"},
     {"deck_id": "bank_70", "archetype": "Hydrapple ex", "split": "holdout"}
   ]

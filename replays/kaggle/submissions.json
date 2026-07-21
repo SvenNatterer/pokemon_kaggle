@@ -1,0 +1,150 @@
+{
+  "competition": "pokemon-tcg-ai-battle",
+  "submissions": {
+    "54404073": {
+      "date": "2026-07-06T18:30:02.543000",
+      "description": "",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54404202": {
+      "date": "2026-07-06T18:36:01.907000",
+      "description": "Deck 1 Agent",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54404263": {
+      "date": "2026-07-06T18:40:06.343000",
+      "description": "Deck 1 Agent - Fix File NameError",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54404340": {
+      "date": "2026-07-06T18:44:13.920000",
+      "description": "Deck 1 Agent - Include SB3",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54404681": {
+      "date": "2026-07-06T19:00:15.360000",
+      "description": "Submission with fixed gymnasium imports",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54405123": {
+      "date": "2026-07-06T19:25:46.290000",
+      "description": "Submission via API",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54405246": {
+      "date": "2026-07-06T19:33:49.013000",
+      "description": "Submission attempt with fixed imports and threads",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54405327": {
+      "date": "2026-07-06T19:37:50.773000",
+      "description": "Added cg back, with PyTorch thread fixes",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54405445": {
+      "date": "2026-07-06T19:45:00.307000",
+      "description": "Deck 1",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54423382": {
+      "date": "2026-07-07T09:12:29.343000",
+      "description": "Deck 100 Agent",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54430612": {
+      "date": "2026-07-07T13:47:34.653000",
+      "description": "Deck 0 Agent",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54495327": {
+      "date": "2026-07-09T13:25:15.973000",
+      "description": "deck 9",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54495401": {
+      "date": "2026-07-09T13:28:14.990000",
+      "description": "deck 9",
+      "file_name": "submission.tar.gz",
+      "status": "ERROR"
+    },
+    "54495680": {
+      "date": "2026-07-09T13:38:27.057000",
+      "description": "v4 Base Bain Fixed Dimension Mismatch and Policy Override bugs",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54495882": {
+      "date": "2026-07-09T13:46:21.560000",
+      "description": "Deck 9 Old V3 Model (Dim 100)",
+      "file_name": "submission_v3_deck9.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54498832": {
+      "date": "2026-07-09T15:23:19.777000",
+      "description": "v4 abra deck 9",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54499398": {
+      "date": "2026-07-09T15:40:17.253000",
+      "description": "Deck 7 (Tournament Deck)",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54505397": {
+      "date": "2026-07-09T20:04:16.507000",
+      "description": "Deck Bank 47 (Abra)",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54567482": {
+      "date": "2026-07-11T09:52:01.630000",
+      "description": "Deck 18",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54582753": {
+      "date": "2026-07-11T19:02:22.343000",
+      "description": "V5 Lucario",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54617196": {
+      "date": "2026-07-12T17:28:25.583000",
+      "description": "V5b Mega Lucario ex 3",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54723890": {
+      "date": "2026-07-15T11:46:31.433000",
+      "description": "Base A | V6 energy scaling + Linux x86_64 | validation 87.9%",
+      "file_name": "submission_base_a.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54784364": {
+      "date": "2026-07-17T13:44:20.287000",
+      "description": "V6 Compact Alakazam 1M 2026-07-17",
+      "file_name": "submission_v6_compact_alakazam_1m_20260717.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54793285": {
+      "date": "2026-07-17T22:24:35.517000",
+      "description": "V6 Compact bank_54 scratch PFSP endless 2026-07-17",
+      "file_name": "submission_v6_compact_scratch_pfsp_endless_20260717.tar.gz",
+      "status": "COMPLETE"
+    }
+  },
+  "updated_at": "2026-07-18T20:35:30.943177+00:00"
+}

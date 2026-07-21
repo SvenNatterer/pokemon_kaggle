@@ -1,0 +1,193 @@
+{
+  "archetype": "dragapult",
+  "best": {
+    "fitness": 0.61,
+    "matches": [
+      {
+        "draws": 0,
+        "kind": "rule",
+        "loss_reasons": {
+          "deckout": 1
+        },
+        "losses": 1,
+        "opponent": "rule_v4_kangaskhan_tempo",
+        "perspective_gap": 1.0,
+        "score_rate": 0.5,
+        "wins": 1
+      },
+      {
+        "draws": 0,
+        "kind": "ppo",
+        "loss_reasons": {},
+        "losses": 0,
+        "opponent": "V6 Training \u00b7 Hop's Trevenant (bank_33)",
+        "perspective_gap": 0.0,
+        "score_rate": 1.0,
+        "wins": 2
+      }
+    ],
+    "parameters": {
+      "attach_one_away": 29.977114105268022,
+      "attack_board_empty_penalty": 33.89515078174384,
+      "attack_damage_scale": 0.08203195004369127,
+      "attack_knockout": 38.436375320671885,
+      "attack_prize": 18.118463585894172,
+      "attack_win_game": 82.08228870691507,
+      "basic_empty_bench_bonus": 42.31802898965127,
+      "basic_thin_bench_bonus": 16.909948419736892,
+      "damage_counter_knockout": 82.39932966716069,
+      "damage_counter_prize": 19.47680785219241,
+      "deckout_penalty": 41.106659622579365,
+      "retreat_damage_weight": 18.115212440641415
+    },
+    "spec": "rule_based:v4:dragapult:tempo?attach_one_away=29.977114&attack_board_empty_penalty=33.895151&attack_damage_scale=0.08203195&attack_knockout=38.436375&attack_prize=18.118464&attack_win_game=82.082289&basic_empty_bench_bonus=42.318029&basic_thin_bench_bonus=16.909948&damage_counter_knockout=82.39933&damage_counter_prize=19.476808&deckout_penalty=41.10666&retreat_damage_weight=18.115212"
+  },
+  "created_at": "2026-07-20T10:13:27.796349+00:00",
+  "deck": "decks/deck_bank/bank_10.csv",
+  "fitness": "40% PPO mean + 30% rule mean + 20% worst matchup - perspective/deckout/benchout penalties",
+  "games_per_matchup": 2,
+  "generations": [
+    {
+      "candidates": [
+        {
+          "fitness": 0.61,
+          "matches": [
+            {
+              "draws": 0,
+              "kind": "rule",
+              "loss_reasons": {
+                "deckout": 1
+              },
+              "losses": 1,
+              "opponent": "rule_v4_kangaskhan_tempo",
+              "perspective_gap": 1.0,
+              "score_rate": 0.5,
+              "wins": 1
+            },
+            {
+              "draws": 0,
+              "kind": "ppo",
+              "loss_reasons": {},
+              "losses": 0,
+              "opponent": "V6 Training \u00b7 Hop's Trevenant (bank_33)",
+              "perspective_gap": 0.0,
+              "score_rate": 1.0,
+              "wins": 2
+            }
+          ],
+          "parameters": {
+            "attach_one_away": 29.977114105268022,
+            "attack_board_empty_penalty": 33.89515078174384,
+            "attack_damage_scale": 0.08203195004369127,
+            "attack_knockout": 38.436375320671885,
+            "attack_prize": 18.118463585894172,
+            "attack_win_game": 82.08228870691507,
+            "basic_empty_bench_bonus": 42.31802898965127,
+            "basic_thin_bench_bonus": 16.909948419736892,
+            "damage_counter_knockout": 82.39932966716069,
+            "damage_counter_prize": 19.47680785219241,
+            "deckout_penalty": 41.106659622579365,
+            "retreat_damage_weight": 18.115212440641415
+          },
+          "spec": "rule_based:v4:dragapult:tempo?attach_one_away=29.977114&attack_board_empty_penalty=33.895151&attack_damage_scale=0.08203195&attack_knockout=38.436375&attack_prize=18.118464&attack_win_game=82.082289&basic_empty_bench_bonus=42.318029&basic_thin_bench_bonus=16.909948&damage_counter_knockout=82.39933&damage_counter_prize=19.476808&deckout_penalty=41.10666&retreat_damage_weight=18.115212"
+        },
+        {
+          "fitness": 0.5599999999999999,
+          "matches": [
+            {
+              "draws": 0,
+              "kind": "rule",
+              "loss_reasons": {},
+              "losses": 0,
+              "opponent": "rule_v4_kangaskhan_tempo",
+              "perspective_gap": 0.0,
+              "score_rate": 1.0,
+              "wins": 2
+            },
+            {
+              "draws": 0,
+              "kind": "ppo",
+              "loss_reasons": {
+                "deckout": 1
+              },
+              "losses": 1,
+              "opponent": "V6 Training \u00b7 Hop's Trevenant (bank_33)",
+              "perspective_gap": 1.0,
+              "score_rate": 0.5,
+              "wins": 1
+            }
+          ],
+          "parameters": {
+            "attach_one_away": 34.0,
+            "attack_board_empty_penalty": 22.0,
+            "attack_damage_scale": 0.1,
+            "attack_knockout": 30.0,
+            "attack_prize": 14.0,
+            "attack_win_game": 80.0,
+            "basic_empty_bench_bonus": 30.0,
+            "basic_thin_bench_bonus": 12.0,
+            "damage_counter_knockout": 80.0,
+            "damage_counter_prize": 20.0,
+            "deckout_penalty": 50.0,
+            "retreat_damage_weight": 24.0
+          },
+          "spec": "rule_based:v4:dragapult:tempo?attach_one_away=34&attack_board_empty_penalty=22&attack_damage_scale=0.1&attack_knockout=30&attack_prize=14&attack_win_game=80&basic_empty_bench_bonus=30&basic_thin_bench_bonus=12&damage_counter_knockout=80&damage_counter_prize=20&deckout_penalty=50&retreat_damage_weight=24"
+        }
+      ],
+      "generation": 1,
+      "mean": {
+        "attach_one_away": 31.98855705263401,
+        "attack_board_empty_penalty": 27.94757539087192,
+        "attack_damage_scale": 0.09101597502184564,
+        "attack_knockout": 34.21818766033594,
+        "attack_prize": 16.059231792947088,
+        "attack_win_game": 81.04114435345753,
+        "basic_empty_bench_bonus": 36.159014494825634,
+        "basic_thin_bench_bonus": 14.454974209868446,
+        "damage_counter_knockout": 81.19966483358034,
+        "damage_counter_prize": 19.738403926096204,
+        "deckout_penalty": 45.553329811289686,
+        "retreat_damage_weight": 21.057606220320707
+      },
+      "std": {
+        "attach_one_away": 1.81029865262939,
+        "attack_board_empty_penalty": 5.352817851784727,
+        "attack_damage_scale": 0.008085622480338934,
+        "attack_knockout": 3.7963688943023484,
+        "attack_prize": 1.8533086136523778,
+        "attack_win_game": 2.0,
+        "basic_empty_bench_bonus": 5.543113045343071,
+        "basic_thin_bench_bonus": 2.209476788881602,
+        "damage_counter_knockout": 2.0,
+        "damage_counter_prize": 0.75,
+        "deckout_penalty": 4.002003169839286,
+        "retreat_damage_weight": 2.6481544017113636
+      }
+    }
+  ],
+  "hall_of_fame": [
+    {
+      "deck": "decks/deck_bank/bank_10.csv",
+      "kind": "rule",
+      "label": "hall_of_fame_generation_1",
+      "model": "rule_based:v4:dragapult:tempo?attach_one_away=29.977114&attack_board_empty_penalty=33.895151&attack_damage_scale=0.08203195&attack_knockout=38.436375&attack_prize=18.118464&attack_win_game=82.082289&basic_empty_bench_bonus=42.318029&basic_thin_bench_bonus=16.909948&damage_counter_knockout=82.39933&damage_counter_prize=19.476808&deckout_penalty=41.10666&retreat_damage_weight=18.115212"
+    }
+  ],
+  "opponents": [
+    {
+      "deck": "decks/deck_bank/bank_55.csv",
+      "kind": "rule",
+      "label": "rule_v4_kangaskhan_tempo",
+      "model": "rule_based:v4:kangaskhan:tempo"
+    },
+    {
+      "deck": "decks/deck_bank/bank_33.csv",
+      "kind": "ppo",
+      "label": "V6 Training \u00b7 Hop's Trevenant (bank_33)",
+      "model": "models/training_v6/ppo_v6_deck_bank_33_compact_c.zip"
+    }
+  ],
+  "schema_version": 1,
+  "seed": 20260720,
+  "variant": "tempo"
+}

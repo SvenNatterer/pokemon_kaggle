@@ -51,7 +51,6 @@ run_training_arm() {
   local name="$1"
   local epochs="$2"
   local aux_coef="$3"
-  local sparse="$4"
   local target="models/ppo_v5b_deck_bank_18_compute_ft_${name}.zip"
   local complete_marker="${target%.zip}.complete"
 
@@ -75,6 +74,9 @@ run_training_arm() {
     --opp-deck "$DECK"
     --opp-pool "$LEAGUE_POOL"
     --timesteps "$FINETUNE_STEPS"
+    --policy-version v5
+    --feature-variant full
+    --no-card-table
     --num-envs "$NUM_ENVS"
     --n-steps "$N_STEPS"
     --batch-size "$BATCH_SIZE"
@@ -88,7 +90,6 @@ run_training_arm() {
     --aux-coef "$aux_coef"
     --rotate-perspective
   )
-  [ "$sparse" = "0" ] || cmd+=(--sparse-rewards)
   "${cmd[@]}"
   touch "$complete_marker"
 }
@@ -144,9 +145,8 @@ require_file "$STAGE8_MODEL"
 
 # Independent ablations from the exact same frozen stage-7 parent.
 declare -a FINETUNE_MODELS=()
-run_training_arm "epochs2" 2 0.10 0
-run_training_arm "aux0" 1 0 0
-run_training_arm "sparse" 1 0.10 1
+run_training_arm "epochs2" 2 0.10
+run_training_arm "aux0" 1 0
 
 # Compare every useful checkpoint on the validation set. The holdout remains
 # untouched during model selection.

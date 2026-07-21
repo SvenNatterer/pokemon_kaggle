@@ -9,6 +9,14 @@ wandb/
 arena_data/
 server_train.log
 
+# Legacy runtime state locations (runtime data now lives in arena_data/)
+decks/generation.json
+decks/status.json
+decks/submission_results.json
+decks/training_progress.json
+decks/watched_models.json
+leaderboard.md
+
 # Models and large files
 models/
 *.zip
@@ -20,6 +28,7 @@ pokemon-tcg-ai-battle/
 kaggle_bundle/
 
 # OS generated files
+.Rhistory
 .DS_Store
 .DS_Store?
 ._*

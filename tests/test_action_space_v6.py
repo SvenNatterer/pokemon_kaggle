@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -50,6 +51,61 @@ class ActionSpaceV6Tests(unittest.TestCase):
             obs, V6_STOP_ACTION, pending, stop_action=V6_STOP_ACTION
         )
         self.assertEqual(([0], True, False), (pending, committed, invalid))
+
+    def test_pending_selection_mask_follows_actor_ownership_in_both_perspectives(self):
+        selection = _selection(min_count=2, max_count=3, option_count=3)
+        selection.current = None
+        selection.logs = []
+
+        for learner_perspective in (0, 1):
+            with self.subTest(learner_perspective=learner_perspective):
+                env = PokemonTCGEnv(
+                    [6] * 60,
+                    [5] * 60,
+                    learner_perspective=learner_perspective,
+                    action_space_size=V6_ACTION_SPACE_SIZE,
+                )
+                env.pending_selection = [0, 2]
+                env.opponent_pending_selection = [1]
+
+                with patch("src.env_wrapper.to_observation_class", return_value=selection):
+                    learner_obs = env._get_obs_python(
+                        perspective=learner_perspective,
+                        force_structured=False,
+                    )
+                    opponent_obs = env._get_obs_python(
+                        perspective=1 - learner_perspective,
+                        force_structured=False,
+                    )
+
+                self.assertEqual(0, learner_obs["action_mask"][0])
+                self.assertEqual(1, learner_obs["action_mask"][1])
+                self.assertEqual(0, learner_obs["action_mask"][2])
+                self.assertEqual(1, learner_obs["action_mask"][V6_STOP_ACTION])
+                self.assertEqual(1, opponent_obs["action_mask"][0])
+                self.assertEqual(0, opponent_obs["action_mask"][1])
+                self.assertEqual(1, opponent_obs["action_mask"][2])
+                self.assertEqual(0, opponent_obs["action_mask"][V6_STOP_ACTION])
+
+    def test_native_and_python_paths_share_pending_selection_ownership(self):
+        for learner_perspective in (0, 1):
+            with self.subTest(learner_perspective=learner_perspective):
+                env = PokemonTCGEnv(
+                    [6] * 60,
+                    [5] * 60,
+                    learner_perspective=learner_perspective,
+                )
+                env.pending_selection = [3]
+                env.opponent_pending_selection = [7]
+
+                self.assertIs(
+                    env.pending_selection,
+                    env._pending_selection_for_perspective(learner_perspective),
+                )
+                self.assertIs(
+                    env.opponent_pending_selection,
+                    env._pending_selection_for_perspective(1 - learner_perspective),
+                )
 
     def test_rule_bot_returns_dynamic_v6_stop_index(self):
         observation = {

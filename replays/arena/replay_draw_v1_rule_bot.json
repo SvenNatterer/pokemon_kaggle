@@ -1,0 +1,804 @@
+[
+  {
+    "current": {
+      "energyAttached": false,
+      "firstPlayer": -1,
+      "looking": null,
+      "lookingCount": 0,
+      "players": [
+        {
+          "active": [],
+          "asleep": false,
+          "bench": [],
+          "benchMax": 5,
+          "burned": false,
+          "confused": false,
+          "deck": [
+            {
+              "id": 1227,
+              "name": "Lillie's Determination",
+              "playerIndex": 0,
+              "serial": 25
+            },
+            {
+              "id": 15,
+              "name": "Team Rocket's Energy",
+              "playerIndex": 0,
+              "serial": 59
+            },
+            {
+              "id": 1122,
+              "name": "Pok\u00e9gear 3.0",
+              "playerIndex": 0,
+              "serial": 46
+            },
+            {
+              "id": 1134,
+              "name": "Team Rocket's Transceiver",
+              "playerIndex": 0,
+              "serial": 32
+            },
+            {
+              "id": 1,
+              "name": "Basic {G} Energy",
+              "playerIndex": 0,
+              "serial": 52
+            },
+            {
+              "id": 400,
+              "name": "Team Rocket's Tarountula",
+              "playerIndex": 0,
+              "serial": 4
+            },
+            {
+              "id": 1134,
+              "name": "Team Rocket's Transceiver",
+              "playerIndex": 0,
+              "serial": 34
+            },
+            {
+              "id": 414,
+              "name": "Team Rocket's Articuno",
+              "playerIndex": 0,
+              "serial": 13
+            },
+            {
+              "id": 1121,
+              "name": "Ultra Ball",
+              "playerIndex": 0,
+              "serial": 38
+            },
+            {
+              "id": 401,
+              "name": "Team Rocket's Spidops",
+              "playerIndex": 0,
+              "serial": 9
+            },
+            {
+              "id": 400,
+              "name": "Team Rocket's Tarountula",
+              "playerIndex": 0,
+              "serial": 5
+            },
+            {
+              "id": 1121,
+              "name": "Ultra Ball",
+              "playerIndex": 0,
+              "serial": 37
+            },
+            {
+              "id": 414,
+              "name": "Team Rocket's Articuno",
+              "playerIndex": 0,
+              "serial": 14
+            },
+            {
+              "id": 1216,
+              "name": "Team Rocket's Ariana",
+              "playerIndex": 0,
+              "serial": 29
+            },
+            {
+              "id": 1227,
+              "name": "Lillie's Determination",
+              "playerIndex": 0,
+              "serial": 23
+            },
+            {
+              "id": 15,
+              "name": "Team Rocket's Energy",
+              "playerIndex": 0,
+              "serial": 58
+            },
+            {
+              "id": 431,
+              "name": "Team Rocket's Mewtwo ex",
+              "playerIndex": 0,
+              "serial": 11
+            },
+            {
+              "id": 1218,
+              "name": "Team Rocket's Giovanni",
+              "playerIndex": 0,
+              "serial": 20
+            },
+            {
+              "id": 1,
+              "name": "Basic {G} Energy",
+              "playerIndex": 0,
+              "serial": 57
+            },
+            {
+              "id": 1,
+              "name": "Basic {G} Energy",
+              "playerIndex": 0,
+              "serial": 54
+            },
+            {
+              "id": 1,
+              "name": "Basic {G} Energy",
+              "playerIndex": 0,
+              "serial": 55
+            },
+            {
+              "id": 272,
+              "name": "Lillie\u2019s Clefairy ex",
+              "playerIndex": 0,
+              "serial": 18
+            },
+            {
+              "id": 1116,
+              "name": "Energy Switch",
+              "playerIndex": 0,
+              "serial": 44
+            },
+            {
+              "id": 1220,
+              "name": "Team Rocket's Proton",
+              "playerIndex": 0,
+              "serial": 30
+            },
+            {
+              "id": 1227,
+              "name": "Lillie's Determination",
+              "playerIndex": 0,
+              "serial": 24
+            },
+            {
+              "id": 1,
+              "name": "Basic {G} Energy",
+              "playerIndex": 0,
+              "serial": 56
+            },
+            {
+              "id": 1218,
+              "name": "Team Rocket's Giovanni",
+              "playerIndex": 0,
+              "serial": 21
+            },
+            {
+              "id": 1220,
+              "name": "Team Rocket's Proton",
+              "playerIndex": 0,
+              "serial": 31
+            },
+            {
+              "id": 434,
+              "name": "Team Rocket's Mimikyu",
+              "playerIndex": 0,
+              "serial": 16
+            },
+            {
+              "id": 1129,
+              "name": "Sacred Ash",
+              "playerIndex": 0,
+              "serial": 43
+            },
+            {
+              "id": 5,
+              "name": "Basic {P} Energy",
+              "playerIndex": 0,
+              "serial": 62
+            },
+            {
+              "id": 400,
+              "name": "Team Rocket's Tarountula",
+              "playerIndex": 0,
+              "serial": 6
+            },
+            {
+              "id": 401,
+              "name": "Team Rocket's Spidops",
+              "playerIndex": 0,
+              "serial": 10
+            },
+            {
+              "id": 1218,
+              "name": "Team Rocket's Giovanni",
+              "playerIndex": 0,
+              "serial": 19
+            },
+            {
+              "id": 1097,
+              "name": "Night Stretcher",
+              "playerIndex": 0,
+              "serial": 42
+            },
+            {
+              "id": 431,
+              "name": "Team Rocket's Mewtwo ex",
+              "playerIndex": 0,
+              "serial": 12
+            },
+            {
+              "id": 1218,
+              "name": "Team Rocket's Giovanni",
+              "playerIndex": 0,
+              "serial": 22
+            },
+            {
+              "id": 1216,
+              "name": "Team Rocket's Ariana",
+              "playerIndex": 0,
+              "serial": 27
+            },
+            {
+              "id": 1156,
+              "name": "Lucky Helmet",
+              "playerIndex": 0,
+              "serial": 48
+            },
+            {
+              "id": 434,
+              "name": "Team Rocket's Mimikyu",
+              "playerIndex": 0,
+              "serial": 15
+            },
+            {
+              "id": 15,
+              "name": "Team Rocket's Energy",
+              "playerIndex": 0,
+              "serial": 61
+            },
+            {
+              "id": 15,
+              "name": "Team Rocket's Energy",
+              "playerIndex": 0,
+              "serial": 60
+            },
+            {
+              "id": 1227,
+              "name": "Lillie's Determination",
+              "playerIndex": 0,
+              "serial": 26
+            },
+            {
+              "id": 1134,
+              "name": "Team Rocket's Transceiver",
+              "playerIndex": 0,
+              "serial": 33
+            },
+            {
+              "id": 1094,
+              "name": "Bug Catching Set",
+              "playerIndex": 0,
+              "serial": 40
+            },
+            {
+              "id": 1156,
+              "name": "Lucky Helmet",
+              "playerIndex": 0,
+              "serial": 49
+            },
+            {
+              "id": 1156,
+              "name": "Lucky Helmet",
+              "playerIndex": 0,
+              "serial": 47
+            },
+            {
+              "id": 1121,
+              "name": "Ultra Ball",
+              "playerIndex": 0,
+              "serial": 39
+            },
+            {
+              "id": 1121,
+              "name": "Ultra Ball",
+              "playerIndex": 0,
+              "serial": 36
+            },
+            {
+              "id": 400,
+              "name": "Team Rocket's Tarountula",
+              "playerIndex": 0,
+              "serial": 3
+            },
+            {
+              "id": 1175,
+              "name": "Brave Bangle",
+              "playerIndex": 0,
+              "serial": 50
+            },
+            {
+              "id": 432,
+              "name": "Team Rocket's Wobbuffet",
+              "playerIndex": 0,
+              "serial": 17
+            },
+            {
+              "id": 1134,
+              "name": "Team Rocket's Transceiver",
+              "playerIndex": 0,
+              "serial": 35
+            },
+            {
+              "id": 1094,
+              "name": "Bug Catching Set",
+              "playerIndex": 0,
+              "serial": 41
+            },
+            {
+              "id": 401,
+              "name": "Team Rocket's Spidops",
+              "playerIndex": 0,
+              "serial": 8
+            },
+            {
+              "id": 401,
+              "name": "Team Rocket's Spidops",
+              "playerIndex": 0,
+              "serial": 7
+            },
+            {
+              "id": 1,
+              "name": "Basic {G} Energy",
+              "playerIndex": 0,
+              "serial": 53
+            },
+            {
+              "id": 1257,
+              "name": "Team Rocket's Factory",
+              "playerIndex": 0,
+              "serial": 51
+            },
+            {
+              "id": 1092,
+              "name": "Secret Box",
+              "playerIndex": 0,
+              "serial": 45
+            },
+            {
+              "id": 1216,
+              "name": "Team Rocket's Ariana",
+              "playerIndex": 0,
+              "serial": 28
+            }
+          ],
+          "deckCount": 60,
+          "discard": [],
+          "hand": [],
+          "handCount": 0,
+          "paralyzed": false,
+          "poisoned": false,
+          "prize": []
+        },
+        {
+          "active": [],
+          "asleep": false,
+          "bench": [],
+          "benchMax": 5,
+          "burned": false,
+          "confused": false,
+          "deck": [
+            {
+              "id": 1227,
+              "name": "Lillie's Determination",
+              "playerIndex": 1,
+              "serial": 84
+            },
+            {
+              "id": 119,
+              "name": "Dreepy",
+              "playerIndex": 1,
+              "serial": 65
+            },
+            {
+              "id": 5,
+              "name": "Basic {P} Energy",
+              "playerIndex": 1,
+              "serial": 120
+            },
+            {
+              "id": 1086,
+              "name": "Buddy-Buddy Poffin",
+              "playerIndex": 1,
+              "serial": 105
+            },
+            {
+              "id": 1198,
+              "name": "Crispin",
+              "playerIndex": 1,
+              "serial": 89
+            },
+            {
+              "id": 131,
+              "name": "Duskull",
+              "playerIndex": 1,
+              "serial": 74
+            },
+            {
+              "id": 120,
+              "name": "Drakloak",
+              "playerIndex": 1,
+              "serial": 67
+            },
+            {
+              "id": 1071,
+              "name": "Meowth ex",
+              "playerIndex": 1,
+              "serial": 79
+            },
+            {
+              "id": 121,
+              "name": "Dragapult ex",
+              "playerIndex": 1,
+              "serial": 73
+            },
+            {
+              "id": 121,
+              "name": "Dragapult ex",
+              "playerIndex": 1,
+              "serial": 72
+            },
+            {
+              "id": 1227,
+              "name": "Lillie's Determination",
+              "playerIndex": 1,
+              "serial": 86
+            },
+            {
+              "id": 140,
+              "name": "Fezandipiti ex",
+              "playerIndex": 1,
+              "serial": 83
+            },
+            {
+              "id": 5,
+              "name": "Basic {P} Energy",
+              "playerIndex": 1,
+              "serial": 119
+            },
+            {
+              "id": 1198,
+              "name": "Crispin",
+              "playerIndex": 1,
+              "serial": 90
+            },
+            {
+              "id": 1120,
+              "name": "Crushing Hammer",
+              "playerIndex": 1,
+              "serial": 107
+            },
+            {
+              "id": 1227,
+              "name": "Lillie's Determination",
+              "playerIndex": 1,
+              "serial": 85
+            },
+            {
+              "id": 1120,
+              "name": "Crushing Hammer",
+              "playerIndex": 1,
+              "serial": 109
+            },
+            {
+              "id": 1121,
+              "name": "Ultra Ball",
+              "playerIndex": 1,
+              "serial": 96
+            },
+            {
+              "id": 1080,
+              "name": "Unfair Stamp",
+              "playerIndex": 1,
+              "serial": 112
+            },
+            {
+              "id": 1256,
+              "name": "Team Rocket's Watchtower",
+              "playerIndex": 1,
+              "serial": 114
+            },
+            {
+              "id": 1198,
+              "name": "Crispin",
+              "playerIndex": 1,
+              "serial": 88
+            },
+            {
+              "id": 1121,
+              "name": "Ultra Ball",
+              "playerIndex": 1,
+              "serial": 95
+            },
+            {
+              "id": 120,
+              "name": "Drakloak",
+              "playerIndex": 1,
+              "serial": 69
+            },
+            {
+              "id": 119,
+              "name": "Dreepy",
+              "playerIndex": 1,
+              "serial": 66
+            },
+            {
+              "id": 1120,
+              "name": "Crushing Hammer",
+              "playerIndex": 1,
+              "serial": 108
+            },
+            {
+              "id": 1182,
+              "name": "Boss\u2019s Orders",
+              "playerIndex": 1,
+              "serial": 93
+            },
+            {
+              "id": 1121,
+              "name": "Ultra Ball",
+              "playerIndex": 1,
+              "serial": 97
+            },
+            {
+              "id": 133,
+              "name": "Dusknoir",
+              "playerIndex": 1,
+              "serial": 78
+            },
+            {
+              "id": 132,
+              "name": "Dusclops",
+              "playerIndex": 1,
+              "serial": 76
+            },
+            {
+              "id": 1086,
+              "name": "Buddy-Buddy Poffin",
+              "playerIndex": 1,
+              "serial": 106
+            },
+            {
+              "id": 1097,
+              "name": "Night Stretcher",
+              "playerIndex": 1,
+              "serial": 111
+            },
+            {
+              "id": 1097,
+              "name": "Night Stretcher",
+              "playerIndex": 1,
+              "serial": 110
+            },
+            {
+              "id": 1182,
+              "name": "Boss\u2019s Orders",
+              "playerIndex": 1,
+              "serial": 91
+            },
+            {
+              "id": 2,
+              "name": "Basic {R} Energy",
+              "playerIndex": 1,
+              "serial": 117
+            },
+            {
+              "id": 1121,
+              "name": "Ultra Ball",
+              "playerIndex": 1,
+              "serial": 98
+            },
+            {
+              "id": 121,
+              "name": "Dragapult ex",
+              "playerIndex": 1,
+              "serial": 71
+            },
+            {
+              "id": 7,
+              "name": "Basic {D} Energy",
+              "playerIndex": 1,
+              "serial": 122
+            },
+            {
+              "id": 7,
+              "name": "Basic {D} Energy",
+              "playerIndex": 1,
+              "serial": 121
+            },
+            {
+              "id": 1086,
+              "name": "Buddy-Buddy Poffin",
+              "playerIndex": 1,
+              "serial": 103
+            },
+            {
+              "id": 2,
+              "name": "Basic {R} Energy",
+              "playerIndex": 1,
+              "serial": 115
+            },
+            {
+              "id": 1152,
+              "name": "Pok\u00e9 Pad",
+              "playerIndex": 1,
+              "serial": 100
+            },
+            {
+              "id": 1152,
+              "name": "Pok\u00e9 Pad",
+              "playerIndex": 1,
+              "serial": 99
+            },
+            {
+              "id": 119,
+              "name": "Dreepy",
+              "playerIndex": 1,
+              "serial": 64
+            },
+            {
+              "id": 1152,
+              "name": "Pok\u00e9 Pad",
+              "playerIndex": 1,
+              "serial": 102
+            },
+            {
+              "id": 112,
+              "name": "Munkidori",
+              "playerIndex": 1,
+              "serial": 80
+            },
+            {
+              "id": 120,
+              "name": "Drakloak",
+              "playerIndex": 1,
+              "serial": 68
+            },
+            {
+              "id": 1086,
+              "name": "Buddy-Buddy Poffin",
+              "playerIndex": 1,
+              "serial": 104
+            },
+            {
+              "id": 1256,
+              "name": "Team Rocket's Watchtower",
+              "playerIndex": 1,
+              "serial": 113
+            },
+            {
+              "id": 343,
+              "name": "Shaymin",
+              "playerIndex": 1,
+              "serial": 82
+            },
+            {
+              "id": 1182,
+              "name": "Boss\u2019s Orders",
+              "playerIndex": 1,
+              "serial": 92
+            },
+            {
+              "id": 131,
+              "name": "Duskull",
+              "playerIndex": 1,
+              "serial": 75
+            },
+            {
+              "id": 2,
+              "name": "Basic {R} Energy",
+              "playerIndex": 1,
+              "serial": 116
+            },
+            {
+              "id": 1231,
+              "name": "Dawn",
+              "playerIndex": 1,
+              "serial": 94
+            },
+            {
+              "id": 235,
+              "name": "Budew",
+              "playerIndex": 1,
+              "serial": 81
+            },
+            {
+              "id": 132,
+              "name": "Dusclops",
+              "playerIndex": 1,
+              "serial": 77
+            },
+            {
+              "id": 120,
+              "name": "Drakloak",
+              "playerIndex": 1,
+              "serial": 70
+            },
+            {
+              "id": 1152,
+              "name": "Pok\u00e9 Pad",
+              "playerIndex": 1,
+              "serial": 101
+            },
+            {
+              "id": 5,
+              "name": "Basic {P} Energy",
+              "playerIndex": 1,
+              "serial": 118
+            },
+            {
+              "id": 119,
+              "name": "Dreepy",
+              "playerIndex": 1,
+              "serial": 63
+            },
+            {
+              "id": 1227,
+              "name": "Lillie's Determination",
+              "playerIndex": 1,
+              "serial": 87
+            }
+          ],
+          "deckCount": 60,
+          "discard": [],
+          "hand": [],
+          "handCount": 0,
+          "paralyzed": false,
+          "poisoned": false,
+          "prize": []
+        }
+      ],
+      "result": -1,
+      "retreated": false,
+      "stadium": [],
+      "stadiumPlayed": false,
+      "supporterPlayed": false,
+      "turn": 0,
+      "turnActionCount": 1,
+      "yourIndex": 0
+    },
+    "logs": [],
+    "metadata": {
+      "p0_deck": "decks/deck_bank/bank_38.csv",
+      "p0_name": "Team Rocket's Mewtwo ex",
+      "p1_deck": "decks/deck_bank/bank_10.csv",
+      "p1_name": "Dragapult ex",
+      "status": "truncated",
+      "steps": 16,
+      "termination_reason": "environment_truncated"
+    },
+    "select": {
+      "context": "IsFirst",
+      "contextCard": null,
+      "deck": null,
+      "effect": null,
+      "maxCount": 1,
+      "minCount": 1,
+      "option": [
+        {
+          "type": "Yes"
+        },
+        {
+          "type": "No"
+        }
+      ],
+      "remainDamageCounter": 0,
+      "remainEnergyCost": 0,
+      "type": "YesNo"
+    },
+    "selected": null
+  }
+]

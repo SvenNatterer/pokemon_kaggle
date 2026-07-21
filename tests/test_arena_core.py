@@ -122,6 +122,33 @@ class ParticipantDiscoveryTests(unittest.TestCase):
         self.assertEqual(value.load_status, "unloadable")
         self.assertIn("deck not found", value.load_error)
 
+    def test_manifest_can_limit_automatic_discovery_to_v6(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "models").mkdir()
+            (root / "decks").mkdir()
+            (root / "decks" / "deck_1.csv").write_text("1\n", encoding="utf-8")
+            manifest = root / "decks" / "arena_agents.json"
+            manifest.write_text(json.dumps({
+                "discovery": {"allowed_versions": ["v6"]},
+                "agents": [{
+                    "id": "rules",
+                    "agent_type": "rule_based",
+                    "model_path": "rule_based:balanced",
+                    "deck_path": "decks/deck_1.csv",
+                }],
+            }), encoding="utf-8")
+            for filename in ("ppo_v4_deck_1.zip", "ppo_v6_deck_1.zip"):
+                with zipfile.ZipFile(root / "models" / filename, "w") as archive:
+                    archive.writestr("data", "{}")
+
+            with mock.patch("src.arena_core.ROOT", root), mock.patch(
+                "src.arena_core.PARTICIPANT_MANIFEST", manifest
+            ):
+                values = discover_participants()
+
+        self.assertEqual({value.bot_id for value in values}, {"rules", "ppo_v6_deck_1"})
+
 
 class PersistenceTests(unittest.TestCase):
     def test_holdout_history_preserves_latest_result_for_each_bot(self):

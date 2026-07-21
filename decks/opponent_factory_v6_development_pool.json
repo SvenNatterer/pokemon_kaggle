@@ -1,38 +1,44 @@
 [
   {
-    "label": "Alakazam historical PPO",
-    "deck": "decks/deck_bank/bank_47.csv",
-    "model": "models/ppo_v4_deck_bank_47.zip",
-    "weight": 1.0
-  },
-  {
-    "label": "Zoroark historical PPO",
-    "deck": "decks/deck_bank/bank_19.csv",
-    "model": "models/archive-12-07-26/ppo_v4_deck_bank_19.zip",
-    "weight": 1.0
-  },
-  {
-    "label": "Metagross historical PPO",
-    "deck": "decks/deck_bank/bank_79.csv",
-    "model": "models/archive-12-07-26/ppo_v4_deck_bank_79.zip",
-    "weight": 1.0
-  },
-  {
-    "label": "Honchkrow historical PPO",
-    "deck": "decks/deck_bank/bank_86.csv",
-    "model": "models/archive-12-07-26/ppo_v4_deck_bank_37_opp_stage2.zip",
-    "weight": 1.0
-  },
-  {
-    "label": "Trevenant heuristic anchor",
+    "label": "V6 Training · Hop's Trevenant (bank_33)",
     "deck": "decks/deck_bank/bank_33.csv",
-    "model": "heuristic",
+    "model": "models/training_v6/ppo_v6_deck_bank_33_compact_c.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "V6 Training · Team Rocket's Mewtwo ex (bank_38)",
+    "deck": "decks/deck_bank/bank_38.csv",
+    "model": "models/training_v6/ppo_v6_deck_bank_38_compact_a.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "V6 Training · Haxorus (bank_61)",
+    "deck": "decks/deck_bank/bank_61.csv",
+    "model": "models/training_v6/ppo_v6_deck_bank_61_compact_c.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "V5b Champion Mega Lucario ex",
+    "deck": "decks/deck_bank/bank_18.csv",
+    "model": "models/training_v6/ppo_v5b_deck_bank_18_compute_ft_aux0.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "Foundation Alakazam 1M (Base A)",
+    "deck": "decks/deck_bank/bank_54.csv",
+    "model": "models/foundation/ppo_v6_deck_bank_54_base_a.zip",
+    "weight": 1.0
+  },
+  {
+    "label": "Mega Abomasnow ex rule-based balanced",
+    "deck": "decks/deck_abomasnow_ex.csv",
+    "model": "rule_based:balanced",
     "weight": 0.5
   },
   {
-    "label": "Mewtwo heuristic anchor",
-    "deck": "decks/deck_bank/bank_38.csv",
-    "model": "heuristic",
+    "label": "Dragapult ex rule-based balanced",
+    "deck": "decks/deck_bank/bank_10.csv",
+    "model": "rule_based:balanced",
     "weight": 0.5
   }
 ]

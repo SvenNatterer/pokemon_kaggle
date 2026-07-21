@@ -1,0 +1,197 @@
+{
+  "cached_matches": 3,
+  "candidate": "ppo_v6_deck_bank_70_compact_c",
+  "candidate_spec": {
+    "bot_type": "ppo",
+    "deck_id": "bank_70",
+    "deck_path": "decks/deck_bank/bank_70.csv",
+    "label": "ppo_v6_deck_bank_70_compact_c",
+    "model_path": "models/opponent_factory_v6_compact_potential/ppo_v6_deck_bank_70_compact_c.zip"
+  },
+  "games_per_pair": 30,
+  "holdout_file": "decks/holdout_opponents.json",
+  "parallel_workers": 6,
+  "selected_at": "2026-07-19T15:41:31.553603+00:00",
+  "selection_metric": "health_gate, wilson95_score_lb, worst_score_rate, score_rate",
+  "summary": {
+    "by_opponent": {
+      "ppo_v6_compact_a_bank_24": {
+        "draws": 0,
+        "games": 30,
+        "losses": 2,
+        "score_rate": 0.9333333333333333,
+        "wins": 28
+      },
+      "ppo_v6_compact_a_bank_99": {
+        "draws": 0,
+        "games": 30,
+        "losses": 7,
+        "score_rate": 0.7666666666666667,
+        "wins": 23
+      },
+      "ppo_v6_compact_b_bank_3": {
+        "draws": 0,
+        "games": 30,
+        "losses": 0,
+        "score_rate": 1.0,
+        "wins": 30
+      },
+      "ppo_v6_compact_b_bank_63": {
+        "draws": 0,
+        "games": 30,
+        "losses": 2,
+        "score_rate": 0.9333333333333333,
+        "wins": 28
+      },
+      "ppo_v6_compact_c_bank_14": {
+        "draws": 0,
+        "games": 30,
+        "losses": 1,
+        "score_rate": 0.9666666666666667,
+        "wins": 29
+      },
+      "ppo_v6_compact_c_bank_70": {
+        "draws": 0,
+        "games": 30,
+        "losses": 16,
+        "score_rate": 0.4666666666666667,
+        "wins": 14
+      }
+    },
+    "candidate": "ppo_v6_deck_bank_70_compact_c",
+    "candidate_win_reasons": {
+      "benchout": 36,
+      "deckout": 1,
+      "prize": 115
+    },
+    "crashes": 0,
+    "draws": 0,
+    "games": 180,
+    "health": {
+      "engine_errors": 0,
+      "episodes": 180,
+      "gate": {
+        "passed": true,
+        "policy": "zero_tolerance_engine_errors_invalid_actions_and_option_overflows",
+        "violations": []
+      },
+      "invalid_learner_action_rate": 0.0,
+      "invalid_learner_actions": 0,
+      "learner_decisions": 9793,
+      "max_option_count_seen": 58,
+      "opponent_episodes": {},
+      "option_count_histogram": [
+        0,
+        1014,
+        1386,
+        1256,
+        1244,
+        1077,
+        952,
+        415,
+        334,
+        248,
+        234,
+        228,
+        222,
+        181,
+        167,
+        140,
+        112,
+        80,
+        87,
+        73,
+        44,
+        44,
+        32,
+        42,
+        33,
+        27,
+        20,
+        18,
+        16,
+        9,
+        9,
+        8,
+        1,
+        5,
+        4,
+        9,
+        5,
+        0,
+        1,
+        1,
+        2,
+        1,
+        1,
+        1,
+        2,
+        1,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "option_count_percentiles": {
+        "p50": 4,
+        "p90": 14,
+        "p95": 18,
+        "p99": 27
+      },
+      "option_overflows": 0,
+      "schema_version": 1
+    },
+    "health_gate": {
+      "passed": true,
+      "policy": "zero_tolerance_engine_errors_invalid_actions_and_option_overflows",
+      "violations": []
+    },
+    "losses": 28,
+    "mean_turns": 54.40555555555556,
+    "opponent_win_reasons": {
+      "benchout": 4,
+      "deckout": 2,
+      "prize": 22
+    },
+    "perspective": {
+      "player_0": {
+        "draws": 0,
+        "games": 90,
+        "losses": 15,
+        "score_rate": 0.8333333333333334,
+        "wins": 75
+      },
+      "player_1": {
+        "draws": 0,
+        "games": 90,
+        "losses": 13,
+        "score_rate": 0.8555555555555555,
+        "wins": 77
+      }
+    },
+    "perspective_score_gap": 0.022222222222222143,
+    "score_rate": 0.8444444444444444,
+    "wilson95_score_lb": 0.7843630548347439,
+    "win_rate": 0.8444444444444444,
+    "wins": 152,
+    "worst_opponent": "ppo_v6_compact_c_bank_70",
+    "worst_score_rate": 0.4666666666666667
+  }
+}

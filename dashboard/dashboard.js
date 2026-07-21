@@ -2,6 +2,8 @@ const API_BASE = window.location.port === '8080' ? 'http://127.0.0.1:8050' : win
 let busy = false;
 const replayBotIds = new Set();
 const unsavedDeckNames = new Map();
+const replayGroupOpenState = new Map();
+let allReplays = [];
 
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -109,20 +111,24 @@ function renderEvaluation(evaluation, champion, participants = []) {
     const perspectiveGap = Number(winner?.perspective_score_gap || 0);
     const clearsPerspectiveGate = perspectiveGap <= 0.10;
     const clearsWilsonGate = Number(winner?.wilson95_score_lb || 0) >= oldWilson + 0.01;
-    const promotable = Boolean(winner && clearsPerspectiveGate && clearsWilsonGate);
+    const candidateConfigs = evaluation.configuration?.candidates || [];
+    const winnerConfig = candidateConfigs.find(item => item.label === winner?.candidate || item.bot_id === winner?.candidate);
+    const isPpoWinner = !winnerConfig || winnerConfig.bot_type === 'ppo';
+    const promotable = Boolean(winner && isPpoWinner && clearsPerspectiveGate && clearsWilsonGate);
     $('btn-promote').disabled = busy || state !== 'completed' || !evaluation.selection_file || !promotable;
     $('btn-promote').textContent = winner ? `2. ${winner.candidate} promoten` : '2. Promote champion';
     $('btn-promote').title = !winner ? 'Erst eine Validation abschließen.'
+        : !isPpoWinner ? 'Rule-Bots können evaluiert, aber nicht als PPO-Champion promotet werden.'
         : !clearsPerspectiveGate ? `Nicht promotierbar: Perspektiven-Differenz ${percent(perspectiveGap)} ist größer als 10,0%.`
         : !clearsWilsonGate ? `Nicht promotierbar: Wilson ${percent(winner.wilson95_score_lb)} muss mindestens ${percent(oldWilson + 0.01)} erreichen.`
         : `${winner.candidate} als Champion promoten.`;
     $('champion-status').textContent = champion && champion.candidate
         ? `Current champion: ${champion.candidate} (Wilson ${percent(champion.summary?.wilson95_score_lb)})`
         : 'No champion selected. Run validation, then promote its winner.';
-    renderEvaluationResults(evaluation, winner, promotable, clearsPerspectiveGate, clearsWilsonGate, oldWilson, participants);
+    renderEvaluationResults(evaluation, winner, promotable, isPpoWinner, clearsPerspectiveGate, clearsWilsonGate, oldWilson, participants);
 }
 
-function renderEvaluationResults(evaluation, winner, promotable, clearsPerspectiveGate, clearsWilsonGate, oldWilson, participants) {
+function renderEvaluationResults(evaluation, winner, promotable, isPpoWinner, clearsPerspectiveGate, clearsWilsonGate, oldWilson, participants) {
     const rows = Array.isArray(evaluation.results) ? evaluation.results : [];
     if (!rows.length) {
         $('evaluation-results').innerHTML = '<span class="muted-line">Noch keine Validation-Ergebnisse.</span>';
@@ -131,6 +137,7 @@ function renderEvaluationResults(evaluation, winner, promotable, clearsPerspecti
     const winnerName = winner?.candidate || rows[0]?.candidate || '';
     const gate = !winner ? 'Kein Gewinner gespeichert.'
         : promotable ? '✅ Dieser Gewinner kann promotet werden.'
+        : !isPpoWinner ? 'ℹ️ Rule-Bot-Auswertung: keine PPO-Champion-Promotion.'
         : !clearsPerspectiveGate ? `⛔ Nicht promotierbar: Perspektiven-Differenz ${percent(winner.perspective_score_gap)} > 10,0%.`
         : !clearsWilsonGate ? `⛔ Nicht promotierbar: Wilson muss mindestens ${percent(oldWilson + 0.01)} erreichen.`
         : '⛔ Nicht promotierbar.';
@@ -145,7 +152,10 @@ function renderEvaluationResults(evaluation, winner, promotable, clearsPerspecti
 }
 
 function modelPathForCandidate(candidate, evaluation, participants) {
-    const participant = participants.find(item => String(item.model_path || '').split('/').pop().replace(/\.zip$/, '') === candidate);
+    const configuredCandidates = evaluation.configuration?.candidates || [];
+    const configuredCandidate = configuredCandidates.find(item => item.label === candidate || item.bot_id === candidate);
+    if (configuredCandidate?.model_path) return configuredCandidate.model_path;
+    const participant = participants.find(item => item.bot_id === candidate || String(item.model_path || '').split('/').pop().replace(/\.zip$/, '') === candidate);
     if (participant?.model_path) return participant.model_path;
     const configured = evaluation.configuration?.models || [];
     const paths = Array.isArray(configured) ? configured : [configured];
@@ -155,9 +165,22 @@ function modelPathForCandidate(candidate, evaluation, participants) {
 function renderStatus(data) {
     const arena = data.arena || {};
     const state = arena.state || 'stopped';
-    $('arena-state').textContent = `Arena: ${state}${arena.worker_alive ? ` · worker ${arena.worker_pid}` : ''}` +
-        (arena.current_match ? ` · ${arena.current_match.bot_a} vs ${arena.current_match.bot_b}` : '') +
-        (arena.error ? ` · ${arena.error}` : '');
+    let statusText = `Arena: ${state}${arena.worker_alive ? ` · worker ${arena.worker_pid}` : ''}`;
+    if (arena.error) {
+        statusText += ` · <span style="color: var(--danger, #ff4d4f);">${arena.error}</span>`;
+    }
+    
+    let activeMatchesHtml = '';
+    const active = arena.active_matches || [];
+    if (active.length > 0) {
+        activeMatchesHtml = '<div style="margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9rem; text-align: center;">' +
+            active.map((match, i) => `<div>⚔️ Match ${i+1}: <strong>${match.bot_a}</strong> vs <strong>${match.bot_b}</strong></div>`).join('') +
+            '</div>';
+    } else if (arena.current_match) {
+        activeMatchesHtml = `<div style="margin-top: 0.5rem; font-size: 0.9rem; text-align: center;">⚔️ Match: <strong>${arena.current_match.bot_a}</strong> vs <strong>${arena.current_match.bot_b}</strong></div>`;
+    }
+    
+    $('arena-state').innerHTML = `<div>${statusText}</div>${activeMatchesHtml}`;
     $('btn-start').disabled = busy || state === 'running';
     $('btn-pause').disabled = busy || state !== 'running';
     $('btn-stop').disabled = busy || state === 'stopped';
@@ -168,10 +191,12 @@ function renderStatus(data) {
     renderMatchupMatrix(data.leaderboard || [], data.pairwise_results || []);
     renderEvaluation(data.evaluation || {}, data.champion || {}, data.participants || []);
 
-    const ppoBots = (data.participants || []).filter(p => p.enabled && p.bot_type === 'ppo');
+    const evaluationBots = (data.participants || []).filter(p => p.enabled && ['ppo', 'rule_based'].includes(p.bot_type));
     const selected = [...$('evaluation-bot').selectedOptions].map(option => option.value);
-    $('evaluation-bot').innerHTML = ppoBots.map(p => {
-        const filename = String(p.model_path || '').split('/').pop();
+    $('evaluation-bot').innerHTML = evaluationBots.map(p => {
+        const filename = p.bot_type === 'rule_based'
+            ? String(p.model_path || 'rule_based')
+            : String(p.model_path || '').split('/').pop();
         const tags = (p.tags || []).length ? ` [${p.tags.join(', ')}]` : '';
         const unavailable = !['loadable', 'cooldown'].includes(p.load_status);
         const status = p.load_status === 'cooldown'
@@ -219,26 +244,131 @@ async function action(path, body) {
 function formatBytes(bytes) {
     if (!Number.isFinite(bytes)) return '';
     if (bytes < 1024) return `${bytes} B`;
+    if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
     return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
-function renderReplays(replays) {
-    const watchStatus = $('replay-status').dataset.watchStatus || 'Keine Bots für automatische Replays markiert.';
-    $('replay-status').textContent = `${watchStatus} ${replays.length} Replay${replays.length === 1 ? '' : 's'} verfügbar.`;
-    $('replay-list').innerHTML = replays.map(replay => {
-        const url = `${API_BASE}${replay.url}`;
+function normalizeReplay(replay) {
+    if (replay.source && replay.collection) return replay;
+    const parts = String(replay.path || '').replaceAll('\\', '/').split('/');
+    const folder = parts[0] === 'replays' ? parts[1] : '';
+    if (folder === 'arena') return {...replay, source: 'arena', group: 'Arena', collection: 'Arena'};
+    if (folder === 'kaggle') {
+        const submission = parts.length > 3 ? parts[2] : '';
+        return {...replay, source: 'kaggle', group: 'Kaggle', collection: submission ? `Submission ${submission}` : 'Kaggle'};
+    }
+    if (folder === 'test') {
+        const collection = parts.length > 3 ? parts[2] : 'Tests';
+        return {...replay, source: 'test', group: 'Tests', collection};
+    }
+    return {...replay, source: 'other', group: replay.group || 'Other', collection: replay.collection || 'Other'};
+}
+
+function replayTitle(replay) {
+    const meta = replay.metadata || {};
+    return meta.p0_name || meta.p1_name
+        ? `${meta.p0_name || 'Player 0'} vs ${meta.p1_name || 'Player 1'}`
+        : replay.name;
+}
+
+function replayGroupTitle(replay) {
+    if (replay.collection && replay.collection !== replay.group) {
+        return `${replay.group} · ${replay.collection}`;
+    }
+    return replay.group || 'Other';
+}
+
+function replayGroupDescription(replay) {
+    return replay.source === 'kaggle' ? String(replay.submission_description || '').trim() : '';
+}
+
+function formatReplayDate(mtime) {
+    const date = new Date(Number(mtime) * 1000);
+    return Number.isNaN(date.getTime())
+        ? ''
+        : new Intl.DateTimeFormat('de-DE', {dateStyle: 'medium', timeStyle: 'short'}).format(date);
+}
+
+function renderReplayCard(replay) {
+    const url = `${API_BASE}${replay.url}`;
+    const meta = replay.metadata || {};
+    const details = [
+        formatReplayDate(replay.mtime),
+        formatBytes(replay.size),
+        replay.snapshots == null ? '' : `${replay.snapshots} Schritte`,
+        meta.episode_id ? `Episode ${meta.episode_id}` : '',
+        replay.result || '',
+    ].filter(Boolean);
+    return `<article class="replay-item"><div class="replay-item-title">${escapeHtml(replayTitle(replay))}</div>
+        <div class="replay-meta">${details.map(value => `<span class="replay-pill">${escapeHtml(value)}</span>`).join('')}</div>
+        ${replay.status ? `<div class="replay-status-detail">${escapeHtml(replay.status)}</div>` : ''}
+        <div class="replay-path">${escapeHtml(replay.path)}</div><div class="replay-links">
+        <button class="btn btn-primary" onclick="launchHeroz('${escapeHtml(url)}')">HERoz Viz</button>
+        <a class="btn btn-secondary" href="${escapeHtml(url)}" target="_blank" rel="noopener">JSON</a></div></article>`;
+}
+
+function renderReplaySummary(replays) {
+    const counts = {arena: 0, kaggle: 0, test: 0, other: 0};
+    for (const replay of replays) counts[replay.source in counts ? replay.source : 'other'] += 1;
+    $('replay-summary').innerHTML = [
+        ['arena', 'Arena'],
+        ['kaggle', 'Kaggle'],
+        ['test', 'Tests'],
+        ['other', 'Other'],
+    ].filter(([source]) => counts[source]).map(([source, label]) =>
+        `<button class="replay-summary-pill" type="button" data-replay-source="${source}"><strong>${counts[source]}</strong><span>${label}</span></button>`
+    ).join('');
+}
+
+function renderReplays(replays = allReplays) {
+    const query = $('replay-search').value.trim().toLocaleLowerCase('de');
+    const source = $('replay-source').value;
+    const sort = $('replay-sort').value;
+    const visible = replays.filter(replay => {
+        if (source !== 'all' && replay.source !== source) return false;
+        if (!query) return true;
         const meta = replay.metadata || {};
-        const title = meta.p0_name || meta.p1_name ? `${meta.p0_name || 'Player 0'} vs ${meta.p1_name || 'Player 1'}` : replay.name;
-        return `<article class="replay-item"><div class="replay-item-title">${escapeHtml(title)}</div>
-            <div class="replay-meta"><span class="replay-pill">${escapeHtml(replay.group)}</span><span class="replay-pill">${formatBytes(replay.size)}</span></div>
-            <div class="replay-path">${escapeHtml(replay.path)}</div><div class="replay-links">
-            <button class="btn btn-primary" onclick="launchHeroz('${escapeHtml(url)}')">HERoz Viz</button>
-            <a class="btn btn-secondary" href="${escapeHtml(url)}" target="_blank" rel="noopener">JSON</a></div></article>`;
-    }).join('');
+        return [
+            replay.name, replay.path, replay.group, replay.collection,
+            replay.submission_description, meta.p0_name, meta.p1_name,
+            meta.episode_id, replay.result, replay.status,
+        ].some(value => String(value || '').toLocaleLowerCase('de').includes(query));
+    }).sort((left, right) => {
+        if (sort === 'oldest') return Number(left.mtime) - Number(right.mtime);
+        if (sort === 'name') return replayTitle(left).localeCompare(replayTitle(right), 'de');
+        return Number(right.mtime) - Number(left.mtime);
+    });
+
+    const watchStatus = $('replay-status').dataset.watchStatus || 'Keine Bots für automatische Replays markiert.';
+    $('replay-status').textContent = `${watchStatus} ${visible.length} von ${replays.length} Replays angezeigt.`;
+    renderReplaySummary(replays);
+
+    const groups = new Map();
+    for (const replay of visible) {
+        const key = encodeURIComponent(`${replay.source || 'other'}\u0000${replay.collection || replay.group || 'Other'}`);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(replay);
+    }
+    const sourceOrder = {arena: 0, kaggle: 1, test: 2, other: 3};
+    const groupedReplays = [...groups.entries()].sort(([, left], [, right]) =>
+        (sourceOrder[left[0].source] ?? sourceOrder.other) - (sourceOrder[right[0].source] ?? sourceOrder.other)
+    );
+    $('replay-list').innerHTML = groupedReplays.map(([key, items], index) => {
+        const title = replayGroupTitle(items[0]);
+        const description = replayGroupDescription(items[0]);
+        const isOpen = replayGroupOpenState.has(key) ? replayGroupOpenState.get(key) : Boolean(query || index === 0);
+        return `<details class="replay-group" data-replay-group-key="${escapeHtml(key)}"${isOpen ? ' open' : ''}>
+            <summary><span class="replay-group-heading"><span>${escapeHtml(title)}</span>${description ? `<span class="replay-group-description">${escapeHtml(description)}</span>` : ''}</span><span class="replay-group-count">${items.length} Replay${items.length === 1 ? '' : 's'}</span></summary>
+            <div class="replay-grid">${items.map(renderReplayCard).join('')}</div>
+        </details>`;
+    }).join('') || '<div class="replay-empty">Keine Replays passen zu den aktuellen Filtern.</div>';
 }
 
 async function loadReplays() {
-    try { renderReplays((await api('/api/replays')).replays || []); }
+    try {
+        allReplays = ((await api('/api/replays')).replays || []).map(normalizeReplay);
+        renderReplays();
+    }
     catch (error) { $('replay-status').textContent = error.message; }
 }
 
@@ -255,11 +385,27 @@ window.launchHeroz = async function(url) {
     } catch (error) { popup.close(); alert(`Replay error: ${error.message}`); }
 };
 
-$('btn-start').addEventListener('click', () => action('/api/start'));
+$('btn-start').addEventListener('click', () => {
+    const workersVal = parseInt($('num-workers').value, 10) || 4;
+    action('/api/start', { workers: workersVal });
+});
 $('btn-pause').addEventListener('click', () => action('/api/pause'));
 $('btn-stop').addEventListener('click', () => action('/api/stop'));
 $('btn-refresh').addEventListener('click', refreshAll);
 $('replay-refresh').addEventListener('click', loadReplays);
+$('replay-search').addEventListener('input', () => renderReplays());
+$('replay-source').addEventListener('change', () => renderReplays());
+$('replay-sort').addEventListener('change', () => renderReplays());
+$('replay-list').addEventListener('toggle', event => {
+    const group = event.target.closest('details.replay-group');
+    if (group) replayGroupOpenState.set(group.dataset.replayGroupKey, group.open);
+}, true);
+$('replay-summary').addEventListener('click', event => {
+    const button = event.target.closest('[data-replay-source]');
+    if (!button) return;
+    $('replay-source').value = button.dataset.replaySource;
+    renderReplays();
+});
 $('leaderboard-body').addEventListener('change', async event => {
     const toggle = event.target.closest('.replay-bot-toggle');
     if (!toggle) return;
@@ -302,9 +448,9 @@ $('btn-reset').addEventListener('click', () => {
 });
 $('btn-evaluate').addEventListener('click', () => {
     const bot_ids = [...$('evaluation-bot').selectedOptions].map(option => option.value);
-    if (!bot_ids.length) return showMessage('Select at least one PPO candidate.', true);
+    if (!bot_ids.length) return showMessage('Select at least one evaluation candidate.', true);
     action('/api/evaluation/start', {
-        bot_ids, mode: $('evaluation-mode').value, games: Number($('evaluation-games').value || 30)
+        bot_ids, mode: $('evaluation-mode').value, games: Number($('evaluation-games').value || 100)
     });
 });
 $('btn-promote').addEventListener('click', () => action('/api/champion/promote', {

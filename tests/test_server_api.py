@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from unittest import mock
@@ -68,11 +69,23 @@ class ServerApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         reset.assert_called_once_with()
 
-    def test_rule_bot_is_not_sent_to_ppo_holdout_runner(self):
-        rule = Participant("rule", "Rule", "rule_based", "deck.csv", load_status="loadable")
-        with mock.patch.object(server, "discover_participants", return_value=[rule]):
-            response = self.client.post("/api/evaluation/start", json={"bot_id": "rule", "games": 1})
-        self.assertEqual(response.status_code, 400)
+    def test_rule_bot_is_sent_to_evaluation_with_profile_and_deck(self):
+        rule = Participant(
+            "rule", "Rule", "rule_based", "decks/deck_1.csv", "rule_based:balanced",
+            load_status="loadable",
+        )
+        with mock.patch.object(server, "discover_participants", return_value=[rule]), mock.patch.object(
+            server.arena_controller, "status", return_value={"state": "paused"}
+        ), mock.patch.object(server.subprocess, "Popen", return_value=FakeProcess()) as popen:
+            response = self.client.post(
+                "/api/evaluation/start", json={"bot_id": "rule", "games": 1, "mode": "validation"}
+            )
+        self.assertEqual(response.status_code, 200)
+        command = popen.call_args.args[0]
+        spec = json.loads(command[command.index("--candidate-spec") + 1])
+        self.assertEqual(spec["model_path"], "rule_based:balanced")
+        self.assertEqual(spec["deck_path"], "decks/deck_1.csv")
+        self.assertEqual(spec["bot_type"], "rule_based")
 
     def test_arena_cooldown_does_not_block_validation(self):
         ppo = Participant(
@@ -88,6 +101,24 @@ class ServerApiTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(popen.call_args.kwargs.get("start_new_session", False))
+
+    def test_evaluation_defaults_to_100_games_and_parallel_workers(self):
+        ppo = Participant(
+            "ppo", "PPO", "ppo", "decks/deck_1.csv", "models/ppo_deck_1.zip",
+            load_status="loadable",
+        )
+        with mock.patch.object(server, "discover_participants", return_value=[ppo]), mock.patch.object(
+            server.arena_controller, "status", return_value={"state": "paused"}
+        ), mock.patch.object(server.subprocess, "Popen", return_value=FakeProcess()) as popen:
+            response = self.client.post(
+                "/api/evaluation/start",
+                json={"bot_id": "ppo", "mode": "validation"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        command = popen.call_args.args[0]
+        self.assertEqual(command[command.index("--games") + 1], "100")
+        self.assertGreater(int(command[command.index("--workers") + 1]), 0)
 
     def test_evaluation_start_does_not_write_arena_matches(self):
         ppo = Participant("ppo", "PPO", "ppo", "decks/deck_1.csv", "models/ppo_deck_1.zip", load_status="loadable")
@@ -115,18 +146,63 @@ class ServerApiTests(unittest.TestCase):
     def test_champion_promotion_runs_script_as_module(self):
         evaluation = {"state": "completed", "selection_file": "arena_data/selection.json"}
         completed = mock.Mock(returncode=0, stdout="Promoted champion", stderr="")
-        with mock.patch.object(server, "read_json", side_effect=[evaluation, {}]), mock.patch.object(
+        with mock.patch.object(server, "read_json", side_effect=[evaluation, {}, {}]), mock.patch.object(
             server.subprocess, "run", return_value=completed
         ) as run:
             response = self.client.post("/api/champion/promote", json={})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(run.call_args.args[0][:3], [server.sys.executable, "-m", "scripts.promote_champion"])
 
+    def test_rule_bot_evaluation_winner_cannot_be_promoted(self):
+        evaluation = {"state": "completed", "selection_file": "arena_data/selection.json"}
+        selection = {"candidate": "rule", "candidate_spec": {"bot_type": "rule_based"}}
+        with mock.patch.object(server, "read_json", side_effect=[evaluation, selection]), mock.patch.object(
+            server.subprocess, "run"
+        ) as run:
+            response = self.client.post("/api/champion/promote", json={})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Rule-based", response.get_json()["message"])
+        run.assert_not_called()
+
     def test_watched_bots_are_deduplicated_and_saved_atomically(self):
         with mock.patch.object(server, "atomic_write_json") as write:
             response = self.client.post("/api/watched", json={"watched": ["b", "a", "b", ""]})
         self.assertEqual(response.status_code, 200)
         write.assert_called_once_with(server.WATCHED_FILE, {"watched": ["a", "b"]})
+
+    def test_replay_location_organizes_known_sources(self):
+        self.assertEqual(
+            server.replay_location("replays/kaggle/54499398/episode-1-replay.json"),
+            ("kaggle", "Kaggle", "Submission 54499398"),
+        )
+        self.assertEqual(
+            server.replay_location("replays/test/generated_20260715/example.json"),
+            ("test", "Tests", "generated_20260715"),
+        )
+        self.assertEqual(
+            server.replay_location("replays/arena/example.json"),
+            ("arena", "Arena", "Arena"),
+        )
+
+    def test_replay_details_extracts_kaggle_names_and_result(self):
+        metadata, snapshots, result, status = server.replay_details({
+            "info": {"EpisodeId": 42, "TeamNames": ["Alpha", "Beta"]},
+            "rewards": [1, -1],
+            "statuses": ["DONE", "DONE"],
+            "steps": [[], []],
+        })
+        self.assertEqual(metadata, {"p0_name": "Alpha", "p1_name": "Beta", "episode_id": 42})
+        self.assertEqual(snapshots, 2)
+        self.assertEqual(result, "P0 win")
+        self.assertEqual(status, "DONE / DONE")
+
+    def test_kaggle_submission_descriptions_reads_metadata(self):
+        payload = {"submissions": {"54499398": {"description": "Compact V6"}}}
+        with mock.patch("builtins.open", mock.mock_open(read_data=json.dumps(payload))):
+            self.assertEqual(
+                server.kaggle_submission_descriptions(),
+                {"54499398": "Compact V6"},
+            )
 
     def test_bot_names_are_saved_per_checkpoint(self):
         participant = Participant("checkpoint-a", "Old", "ppo", "deck.csv", "model.zip")

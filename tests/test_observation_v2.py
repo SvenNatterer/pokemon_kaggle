@@ -14,7 +14,13 @@ from src.custom_policy import (
     build_card_relations,
     _effect_metadata,
 )
-from src.env_wrapper import PokemonTCGEnv, encode_hidden_card_count
+import src.env_wrapper as env_wrapper_module
+from src.env_wrapper import (
+    PokemonTCGEnv,
+    bound_entity_energy_features,
+    encode_energy_count,
+    encode_hidden_card_count,
+)
 
 
 def _player(hand=None, active=None, bench=None):
@@ -64,6 +70,38 @@ def test_hidden_card_count_target_preserves_duplicate_counts():
     assert encoded[0] == 0.0
     assert all(left < right for left, right in zip(encoded, encoded[1:]))
     assert encoded[-1] == 1.0
+
+
+def test_energy_count_features_are_bounded_and_preserve_small_counts():
+    encoded = [encode_energy_count(count, maximum=4) for count in (0, 1, 2, 4, 8)]
+
+    assert encoded == [0.0, 0.25, 0.5, 1.0, 1.0]
+
+
+def test_native_entity_energy_features_are_bounded_without_touching_other_features():
+    features = np.zeros((12, 36), dtype=np.float32)
+    features[0, 4] = 0.75
+    features[0, 8] = 1.25
+    features[0, 20] = 2.0
+
+    bounded = bound_entity_energy_features(features)
+
+    assert bounded[0, 4] == 0.75
+    assert bounded[0, 8] == 1.0
+    assert bounded[0, 20] == 1.0
+
+
+def test_observation_uses_python_fallback_without_native_symbol(monkeypatch):
+    env = PokemonTCGEnv([6] * 60, [5] * 60)
+    monkeypatch.setattr(env_wrapper_module, "HAS_NATIVE_V6_OBSERVATION", False)
+    monkeypatch.setattr(env, "_get_obs_python", lambda **kwargs: "python")
+
+    def unexpected_native_call(**kwargs):
+        raise AssertionError("native encoder must not run without its exported symbol")
+
+    monkeypatch.setattr(env, "_get_obs_cpp", unexpected_native_call)
+
+    assert env._get_obs(perspective=1, pending_selection=[2]) == "python"
 
 
 def test_rules_text_is_encoded_as_factual_effect_features():

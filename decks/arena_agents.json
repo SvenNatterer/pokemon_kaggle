@@ -1,94 +1,162 @@
 {
-    "agents": [
-        {
-            "id": "rule_bot_riolu",
-            "name": "Rule Bot · Mega Lucario ex",
-            "agent_type": "rule_based",
-            "model_path": "rule_based:setup",
-            "deck_path": "decks/deck_bank/bank_18.csv",
-            "version": "rule-v2-setup",
-            "tags": ["current", "rule_based"],
-            "enabled": true
-        },
-        {
-            "id": "rule_bot_aggressive_98",
-            "name": "Rule Bot · Aggressive · Deck 98",
-            "agent_type": "rule_based",
-            "model_path": "rule_based:aggressive",
-            "deck_path": "decks/deck_98.csv",
-            "version": "rule-v2-aggressive",
-            "tags": ["current", "rule_based", "validation"],
-            "enabled": true
-        },
-        {
-            "id": "rule_bot_defensive_16",
-            "name": "Rule Bot · Defensive · Deck 16",
-            "agent_type": "rule_based",
-            "model_path": "rule_based:defensive",
-            "deck_path": "decks/deck_16.csv",
-            "version": "rule-v2-defensive",
-            "tags": ["current", "rule_based", "validation"],
-            "enabled": true
-        },
-        {
-            "id": "rule_bot_balanced_bank10",
-            "name": "Rule Bot · Balanced · Bank 10",
-            "agent_type": "rule_based",
-            "model_path": "rule_based:balanced",
-            "deck_path": "decks/deck_bank/bank_10.csv",
-            "version": "rule-v2-balanced",
-            "tags": ["current", "rule_based", "holdout"],
-            "enabled": true
-        },
-        {
-            "id": "foundation__ppo_v4_transfer_source_deck_4_endless_2_ckpt2",
-            "name": "Foundation · Mega Kangaskhan ex (Legacy ckpt2)",
-            "agent_type": "ppo",
-            "model_path": "models/foundation/ppo_v4_transfer_source_deck_4_endless_2_ckpt2.zip",
-            "deck_path": "decks/deck_4.csv",
-            "version": "v4",
-            "tags": ["legacy", "foundation", "historical_checkpoint"],
-            "enabled": true
-        },
-        {
-            "id": "foundation__ppo_v6_deck_bank_54_base_a",
-            "name": "Foundation · Alakazam (Base A)",
-            "agent_type": "ppo",
-            "model_path": "models/foundation/ppo_v6_deck_bank_54_base_a.zip",
-            "deck_path": "decks/deck_bank/bank_54.csv",
-            "version": "v6",
-            "tags": ["legacy", "foundation", "base"],
-            "enabled": true
-        },
-        {
-            "id": "foundation__ppo_v6_deck_bank_55_base_b",
-            "name": "Foundation · Mega Kangaskhan ex (Base B)",
-            "agent_type": "ppo",
-            "model_path": "models/foundation/ppo_v6_deck_bank_55_base_b.zip",
-            "deck_path": "decks/deck_bank/bank_55.csv",
-            "version": "v6",
-            "tags": ["legacy", "foundation", "base"],
-            "enabled": true
-        },
-        {
-            "id": "foundation__ppo_v6_deck_bank_56_base_c",
-            "name": "Foundation · Dragapult ex (Base C)",
-            "agent_type": "ppo",
-            "model_path": "models/foundation/ppo_v6_deck_bank_56_base_c.zip",
-            "deck_path": "decks/deck_bank/bank_56.csv",
-            "version": "v6",
-            "tags": ["legacy", "foundation", "base"],
-            "enabled": true
-        },
-        {
-            "id": "foundation__ppo_v6_deck_bank_65_base_d",
-            "name": "Foundation · Metagross (Base D)",
-            "agent_type": "ppo",
-            "model_path": "models/foundation/ppo_v6_deck_bank_65_base_d.zip",
-            "deck_path": "decks/deck_bank/bank_65.csv",
-            "version": "v6",
-            "tags": ["legacy", "foundation", "base"],
-            "enabled": true
-        }
+  "version": 6,
+  "purpose": "Arena-only V6 league plus rule-based sparring bots; validation and holdout remain excluded.",
+  "discovery": {
+    "allowed_versions": [
+      "v6"
     ]
+  },
+  "agents": [
+    {
+      "id": "rule_bot_riolu",
+      "name": "Rule Mega Lucario ex",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:setup",
+      "deck_path": "decks/deck_bank/bank_18.csv",
+      "version": "rule-v3-setup",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "rule_bot_defensive_16",
+      "name": "Rule Ethan's Typhlosion",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:defensive",
+      "deck_path": "decks/deck_16.csv",
+      "version": "rule-v3-defensive",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "rule_bot_balanced_bank10",
+      "name": "Rule Dragapult ex",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:balanced",
+      "deck_path": "decks/deck_bank/bank_10.csv",
+      "version": "rule-v3-balanced",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+
+    {
+      "id": "training_v6__ppo_v6_deck_bank_33_compact_c",
+      "name": "V6 Training · Hop's Trevenant",
+      "agent_type": "ppo",
+      "model_path": "models/training_v6/ppo_v6_deck_bank_33_compact_c.zip",
+      "deck_path": "decks/deck_bank/bank_33.csv",
+      "version": "v6",
+      "tags": ["v6", "training", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "training_v6__ppo_v6_deck_bank_38_compact_a",
+      "name": "V6 Training · Team Rocket's Mewtwo ex",
+      "agent_type": "ppo",
+      "model_path": "models/training_v6/ppo_v6_deck_bank_38_compact_a.zip",
+      "deck_path": "decks/deck_bank/bank_38.csv",
+      "version": "v6",
+      "tags": ["v6", "training", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "training_v6__ppo_v6_deck_bank_49_compact_b",
+      "name": "V6 Training · Hydrapple ex",
+      "agent_type": "ppo",
+      "model_path": "models/training_v6/ppo_v6_deck_bank_49_compact_b.zip",
+      "deck_path": "decks/deck_bank/bank_49.csv",
+      "version": "v6",
+      "tags": ["v6", "training", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "training_v6__ppo_v6_deck_bank_61_compact_c",
+      "name": "V6 Training · Haxorus",
+      "agent_type": "ppo",
+      "model_path": "models/training_v6/ppo_v6_deck_bank_61_compact_c.zip",
+      "deck_path": "decks/deck_bank/bank_61.csv",
+      "version": "v6",
+      "tags": ["v6", "training", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "rule_bot_balanced_bank54",
+      "name": "Rule Alakazam ex (Bank 54)",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:balanced",
+      "deck_path": "decks/deck_bank/bank_54.csv",
+      "version": "rule-v3-balanced",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "rule_bot_balanced_bank70",
+      "name": "Rule Hydrapple ex (Bank 70)",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:balanced",
+      "deck_path": "decks/deck_bank/bank_70.csv",
+      "version": "rule-v3-balanced",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "rule_bot_balanced_bank14",
+      "name": "Rule Alakazam ex (Bank 14)",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:balanced",
+      "deck_path": "decks/deck_bank/bank_14.csv",
+      "version": "rule-v3-balanced",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "rule_bot_aggressive_bank100",
+      "name": "Rule Mega Starmie ex",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:aggressive",
+      "deck_path": "decks/deck_bank/bank_100.csv",
+      "version": "rule-v3-aggressive",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "rule_bot_defensive_bank24",
+      "name": "Rule Mega Kangaskhan ex",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:defensive",
+      "deck_path": "decks/deck_bank/bank_24.csv",
+      "version": "rule-v3-defensive",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "rule_bot_aggressive_bank38",
+      "name": "Rule Team Rocket's Mewtwo ex",
+      "agent_type": "rule_based",
+      "model_path": "rule_based:aggressive",
+      "deck_path": "decks/deck_bank/bank_38.csv",
+      "version": "rule-v3-aggressive",
+      "tags": ["current", "rule_based", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "v5b_champion_mega_lucario_bank18",
+      "name": "V5b Champion · Mega Lucario ex",
+      "agent_type": "ppo",
+      "model_path": "models/training_v6/ppo_v5b_deck_bank_18_compute_ft_aux0.zip",
+      "deck_path": "decks/deck_bank/bank_18.csv",
+      "version": "v5b",
+      "tags": ["v5b", "champion", "arena"],
+      "enabled": true
+    },
+    {
+      "id": "foundation__ppo_v6_deck_bank_54_base_a",
+      "name": "Foundation · Alakazam 1M (Base A)",
+      "agent_type": "ppo",
+      "model_path": "models/foundation/ppo_v6_deck_bank_54_base_a.zip",
+      "deck_path": "decks/deck_bank/bank_54.csv",
+      "version": "v6",
+      "tags": ["v6", "foundation", "arena"],
+      "enabled": true
+    }
+  ]
 }

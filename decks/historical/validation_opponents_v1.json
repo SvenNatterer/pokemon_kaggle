@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "purpose": "Repeatable model selection only; never train against these exact opponents.",
+  "opponents": [
+    {
+      "label": "ppo_deck_0",
+      "deck_id": "0",
+      "model_path": "models/validation/ppo_deck_0.zip",
+      "deck_path": "decks/deck_0.csv"
+    },
+    {
+      "label": "ppo_v4_deck_16_opp_stage1",
+      "deck_id": "16",
+      "model_path": "models/validation/ppo_v4_deck_16_opp_stage1.zip",
+      "deck_path": "decks/deck_16.csv"
+    },
+    {
+      "label": "ppo_v4_deck_9",
+      "deck_id": "9",
+      "model_path": "models/validation/ppo_v4_deck_9.zip",
+      "deck_path": "decks/deck_9.csv"
+    },
+    {
+      "label": "ppo_v4_deck_98",
+      "deck_id": "98",
+      "model_path": "models/validation/ppo_v4_deck_98.zip",
+      "deck_path": "decks/deck_98.csv"
+    },
+    {
+      "label": "ppo_v4_deck_bank_10",
+      "deck_id": "bank_10",
+      "model_path": "models/validation/ppo_v4_deck_bank_10.zip",
+      "deck_path": "decks/deck_bank/bank_10.csv"
+    },
+    {
+      "label": "ppo_v4_deck_bank_100",
+      "deck_id": "bank_100",
+      "model_path": "models/validation/ppo_v4_deck_bank_100.zip",
+      "deck_path": "decks/deck_bank/bank_100.csv"
+    },
+    {
+      "label": "rule_aggressive_deck_98",
+      "deck_id": "98",
+      "model_path": "rule_based:aggressive",
+      "deck_path": "decks/deck_98.csv"
+    },
+    {
+      "label": "rule_defensive_deck_16",
+      "deck_id": "16",
+      "model_path": "rule_based:defensive",
+      "deck_path": "decks/deck_16.csv"
+    }
+  ]
+}

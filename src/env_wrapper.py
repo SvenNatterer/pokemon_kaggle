@@ -424,8 +424,22 @@ class PokemonTCGEnv(gym.Env):
                 self.opponent_model = cached_model
         if self.opponent_model_path is not None and self.opponent_model is None:
             from src.bot_loader import load_bot
+            from src.onnx_opponent import ONNXOpponentWrapper, HAS_ONNXRUNTIME
+            from src.agents.rule_based_agent import is_rule_based_model_spec
 
-            self.opponent_model = load_bot(self.opponent_model_path)
+            onnx_path = self.opponent_model_path.replace(".zip", ".onnx")
+            if (
+                HAS_ONNXRUNTIME
+                and not is_rule_based_model_spec(self.opponent_model_path)
+                and os.path.exists(onnx_path)
+            ):
+                try:
+                    self.opponent_model = ONNXOpponentWrapper(onnx_path)
+                except Exception:
+                    self.opponent_model = load_bot(self.opponent_model_path)
+            else:
+                self.opponent_model = load_bot(self.opponent_model_path)
+
             self.opponent_model_cache[self.opponent_model_path] = self.opponent_model
         
         if self.current_obs_dict is not None:
@@ -699,8 +713,8 @@ class PokemonTCGEnv(gym.Env):
                     opponent_action_size = self.max_options
                 opponent_stop_action = opponent_action_size - 1
                 opponent_space = getattr(self.opponent_model, "observation_space", None)
-                opponent_uses_structured = False
-                if opponent_space is not None and isinstance(opponent_space, spaces.Dict):
+                opponent_uses_structured = getattr(self.opponent_model, "is_structured", False)
+                if not opponent_uses_structured and opponent_space is not None and isinstance(opponent_space, spaces.Dict):
                     required_v2_keys = {"entity_ids", "entity_features", "option_card_ids", "option_attack_ids", "option_features"}
                     opponent_uses_structured = required_v2_keys.issubset(opponent_space.spaces)
 

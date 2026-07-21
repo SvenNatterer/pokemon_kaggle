@@ -1,0 +1,85 @@
+{
+  "factory": "compact_potential_v6",
+  "opponents": [
+    {
+      "action_space_size": 66,
+      "archetype": "Team Rocket's Honchkrow",
+      "deck_id": "bank_57",
+      "deck_path": "decks/deck_bank/bank_57.csv",
+      "feature_variant": "compact",
+      "label": "ppo_v6_compact_a_bank_57",
+      "model_path": "models/holdout/v6/ppo_v6_deck_bank_57_compact_a.zip",
+      "policy_family": "compact_a",
+      "policy_version": "v6",
+      "reward_variant": "potential",
+      "sha256": "377c4ea8a879254128c97b667ce3cbd25ab4654806bcd4739fee60c5392791c4"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "Metagross",
+      "deck_id": "bank_2",
+      "deck_path": "decks/deck_bank/bank_2.csv",
+      "feature_variant": "compact",
+      "label": "ppo_v6_compact_c_bank_2",
+      "model_path": "models/holdout/v6/ppo_v6_deck_bank_2_compact_c.zip",
+      "policy_family": "compact_c",
+      "policy_version": "v6",
+      "reward_variant": "potential",
+      "sha256": "43b6bb169005739175e27151be43d2d73f6f13cf49a00656759e3b1fca98df31"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "Arboliva ex",
+      "deck_id": "bank_99",
+      "deck_path": "decks/deck_bank/bank_99.csv",
+      "feature_variant": "compact",
+      "label": "ppo_v6_compact_a_bank_99",
+      "model_path": "models/holdout/v6/ppo_v6_deck_bank_99_compact_a.zip",
+      "policy_family": "compact_a",
+      "policy_version": "v6",
+      "reward_variant": "potential",
+      "sha256": "f4f14a180e82aaa27da0dbbe0e5318ff8eb3035a6c3d1ad07a4267433d9e230f"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "Dragapult ex",
+      "deck_id": "bank_3",
+      "deck_path": "decks/deck_bank/bank_3.csv",
+      "feature_variant": "compact",
+      "label": "ppo_v6_compact_b_bank_3",
+      "model_path": "models/holdout/v6/ppo_v6_deck_bank_3_compact_b.zip",
+      "policy_family": "compact_b",
+      "policy_version": "v6",
+      "reward_variant": "potential",
+      "sha256": "8d6c5c1d2521319a0d2f75dc8edc0f7ac2dfc36f9800620f55ac995d9a21ccb1"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "Hop's Trevenant",
+      "deck_id": "bank_63",
+      "deck_path": "decks/deck_bank/bank_63.csv",
+      "feature_variant": "compact",
+      "label": "ppo_v6_compact_b_bank_63",
+      "model_path": "models/holdout/v6/ppo_v6_deck_bank_63_compact_b.zip",
+      "policy_family": "compact_b",
+      "policy_version": "v6",
+      "reward_variant": "potential",
+      "sha256": "daa6e9b8a1c0793a285905bfda4901ea21f16254e189beb4d103f1ede22cf342"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "Hydrapple ex",
+      "deck_id": "bank_70",
+      "deck_path": "decks/deck_bank/bank_70.csv",
+      "feature_variant": "compact",
+      "label": "ppo_v6_compact_c_bank_70",
+      "model_path": "models/holdout/v6/ppo_v6_deck_bank_70_compact_c.zip",
+      "policy_family": "compact_c",
+      "policy_version": "v6",
+      "reward_variant": "potential",
+      "sha256": "8610f36d13f9bcc23af5dc984349cea169f3bbe6689962b4c9b98ca0a72bb3ae"
+    }
+  ],
+  "purpose": "Untouched final V6 evaluation only; do not inspect during model selection.",
+  "version": 6
+}

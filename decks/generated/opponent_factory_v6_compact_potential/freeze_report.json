@@ -1,0 +1,16 @@
+{
+  "active_holdout": false,
+  "active_validation": true,
+  "completed_at": "2026-07-18T12:00:34.723513+00:00",
+  "counts": {
+    "holdout": 6,
+    "training": 4,
+    "validation": 6
+  },
+  "factory": "compact_potential_v6",
+  "historical_holdout": "decks/historical/holdout_opponents_v1.json",
+  "historical_validation": "decks/historical/validation_opponents_v1.json",
+  "repair_summary": "logs/opponent_factory_v6_compact_potential/scrape_bug_repair.json",
+  "status": "completed",
+  "target_evaluation": "logs/opponent_factory_v6_compact_potential/post_scrape_target_evaluation.json"
+}

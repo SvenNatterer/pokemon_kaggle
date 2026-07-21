@@ -29,10 +29,9 @@ usage() {
   cat <<'EOF'
 Usage: scripts/run_validation_finetune.sh [--dry-run] [--skip-evaluation]
 
-Runs three independent arms from BASE_MODEL:
+Runs two independent arms from BASE_MODEL:
   epochs2  - n_epochs 2 instead of the control's 1
   aux0     - auxiliary belief loss disabled
-  sparse   - terminal-only rewards
 
 Set BASE_MODEL to a checkpoint compatible with the current Observation/Policy
 architecture. A validation manifest is required for automatic evaluation.
@@ -63,7 +62,7 @@ TARGET_PREFIX="models/${BASE_STEM}_ft"
 declare -a TARGETS=()
 
 run_arm() {
-  local name="$1" epochs="$2" aux="$3" sparse="$4"
+  local name="$1" epochs="$2" aux="$3"
   local target="${TARGET_PREFIX}_${name}.zip"
   TARGETS+=("$target")
   if [ -f "$target" ]; then
@@ -73,13 +72,13 @@ run_arm() {
   local cmd=(
     python src/train.py --deck "$DECK" --model-name "$target" --continue-existing
     --opp-deck "$DECK" --opp-pool "$LEAGUE_POOL" --timesteps "$STEPS"
+    --policy-version v5 --feature-variant full --no-card-table --no-belief-actor
     --num-envs "$NUM_ENVS" --n-steps "$N_STEPS" --batch-size "$BATCH_SIZE"
     --n-epochs "$epochs" --lr "$LR" --ent-coef "$ENT_COEF"
     --clip-range "$CLIP_RANGE" --target-kl "$TARGET_KL" --aux-coef "$aux"
     --rotate-perspective
   )
-  [ "$sparse" = 0 ] || cmd+=(--sparse-rewards)
-  echo "Fine-tune arm $name: epochs=$epochs aux=$aux sparse=$sparse"
+  echo "Fine-tune arm $name: epochs=$epochs aux=$aux"
   printf ' %q' "${cmd[@]}"; echo
   [ "$DRY_RUN" = 0 ] || return 0
   cp "$BASE_MODEL" "$target"
@@ -87,9 +86,8 @@ run_arm() {
 }
 
 # The frozen parent is the control. Each arm isolates one change from it.
-run_arm epochs2 2 "$AUX_COEF" 0
-run_arm aux0 1 0 0
-run_arm sparse 1 "$AUX_COEF" 1
+run_arm epochs2 2 "$AUX_COEF"
+run_arm aux0 1 0
 
 if [ "$EVALUATE" = 1 ]; then
   echo "Running automatic validation for all fine-tune arms."
