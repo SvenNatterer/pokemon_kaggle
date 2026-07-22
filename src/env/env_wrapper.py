@@ -1368,20 +1368,21 @@ class PokemonTCGEnv(gym.Env):
 
         teacher_action = -1
         if self.enable_lookahead_teacher and self.lookahead_teacher is not None and perspective == self.learner_perspective:
-            if random.random() < self.teacher_sample_rate:
-                mask = result.get("action_mask", [])
-                option_count = int(np.count_nonzero(mask))
-                if option_count >= 2:
-                    try:
-                        from src.training.lookahead_teacher import build_search_hypotheses
-                        your_d = self.my_deck if perspective == self.learner_perspective else self.opponent_deck
-                        opp_d = self.opponent_deck if perspective == self.learner_perspective else self.my_deck
-                        hypotheses = build_search_hypotheses(obs, your_deck=your_d, opponent_deck=opp_d, card_data_by_id=self.lookahead_teacher.card_data_by_id)
-                        decision = self.lookahead_teacher.choose(obs, result, perspective=perspective, hypotheses=hypotheses)
-                        if decision is not None:
-                            teacher_action = int(decision.action)
-                    except Exception:
-                        teacher_action = -1
+            mask = result.get("action_mask", [])
+            option_count = int(np.count_nonzero(mask))
+            # Critical decision heuristic: high option branching (>=4 options) or 3% random sampling on >=2 options
+            is_high_branching = option_count >= 4
+            if (is_high_branching or random.random() < self.teacher_sample_rate) and option_count >= 2:
+                try:
+                    from src.training.lookahead_teacher import build_search_hypotheses
+                    your_d = self.my_deck if perspective == self.learner_perspective else self.opponent_deck
+                    opp_d = self.opponent_deck if perspective == self.learner_perspective else self.my_deck
+                    hypotheses = build_search_hypotheses(obs, your_deck=your_d, opponent_deck=opp_d, card_data_by_id=self.lookahead_teacher.card_data_by_id)
+                    decision = self.lookahead_teacher.choose(obs, result, perspective=perspective, hypotheses=hypotheses)
+                    if decision is not None:
+                        teacher_action = int(decision.action)
+                except Exception:
+                    teacher_action = -1
 
         result["teacher_action"] = np.array([teacher_action], dtype=np.int32)
         return result
