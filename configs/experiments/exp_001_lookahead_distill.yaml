@@ -1,13 +1,13 @@
 # EXP-001: On-The-Fly Lookahead Tree Search Policy Distillation Config
 algorithm: PPO
-learning_rate: 0.0003
+learning_rate: 0.0001
 n_steps: 2048
-batch_size: 64
-n_epochs: 10
-gamma: 0.99
+batch_size: 1024
+n_epochs: 2
+gamma: 0.999
 gae_lambda: 0.95
-clip_range: 0.2
-ent_coef: 0.01
+clip_range: 0.12
+ent_coef: 0.008
 opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
 
 # Lookahead Teacher Distillation Parameters
