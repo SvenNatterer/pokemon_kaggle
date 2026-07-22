@@ -1,0 +1,44 @@
+[
+  {
+    "label": "Kaggle · Mega Lucario ex",
+    "deck": "decks/kaggle_bots/deck_kaggle_mega_lucario.csv",
+    "model": "src/agents/kaggle_bots/mega_lucario_agent.py",
+    "weight": 1.0
+  },
+  {
+    "label": "Kaggle · Mega Abomasnow ex",
+    "deck": "decks/kaggle_bots/deck_kaggle_mega_abomasnow.csv",
+    "model": "src/agents/kaggle_bots/mega_abomasnow_agent.py",
+    "weight": 1.0
+  },
+  {
+    "label": "Kaggle · Dragapult ex",
+    "deck": "decks/kaggle_bots/deck_kaggle_dragapult.csv",
+    "model": "src/agents/kaggle_bots/dragapult_agent.py",
+    "weight": 1.0
+  },
+  {
+    "label": "Kaggle · Iono's Zoroark ex",
+    "deck": "decks/kaggle_bots/deck_kaggle_iono_zoroark.csv",
+    "model": "src/agents/kaggle_bots/iono_zoroark_agent.py",
+    "weight": 1.0
+  },
+  {
+    "label": "Kaggle · Alakazam V8",
+    "deck": "decks/kaggle_bots/deck_kaggle_alakazam_v8.csv",
+    "model": "src/agents/kaggle_bots/alakazam_v8_agent.py",
+    "weight": 1.0
+  },
+  {
+    "label": "Kaggle · Battlecore Archaludon",
+    "deck": "decks/kaggle_bots/deck_kaggle_battlecore.csv",
+    "model": "src/agents/kaggle_bots/battlecore_agent.py",
+    "weight": 1.0
+  },
+  {
+    "label": "Kaggle · Conservative Probabilistic",
+    "deck": "decks/kaggle_bots/deck_kaggle_conservative_probabilistic.csv",
+    "model": "src/agents/kaggle_bots/conservative_probabilistic_agent.py",
+    "weight": 1.0
+  }
+]

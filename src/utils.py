@@ -63,6 +63,35 @@ def read_json(path: str | Path, default: Any = None) -> Any:
         return default
 
 
+def resolve_pool_path(pool_path: str | Path) -> Path:
+    """Resolve pool path checking decks/pools/ first, then decks/."""
+    p = Path(pool_path)
+    if p.is_file():
+        return p
+    in_pools = ROOT / "decks" / "pools" / p.name
+    if in_pools.is_file():
+        return in_pools
+    in_decks = ROOT / "decks" / p.name
+    if in_decks.is_file():
+        return in_decks
+    return p
+
+
+def resolve_deck_path(deck_path: str | Path) -> Path:
+    """Resolve deck path checking decks/deck_bank/ first, then decks/."""
+    p = Path(deck_path)
+    if p.is_file():
+        return p
+    in_bank = ROOT / "decks" / "deck_bank" / p.name
+    if in_bank.is_file():
+        return in_bank
+    in_decks = ROOT / "decks" / p.name
+    if in_decks.is_file():
+        return in_decks
+    return p
+
+
+
 def deck_id_for_path(deck_path: str) -> str:
     """Return the deck-name key for a regular or bank deck path."""
     stem = Path(deck_path).stem

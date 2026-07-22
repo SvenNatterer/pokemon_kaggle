@@ -22,11 +22,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from src.arena.arena_core import (
-    discover_participants,
-    enabled_participants,
-    read_json,
+from src.utils import (
     atomic_write_json,
+    deck_display_name_for_path,
+    model_display_name_for_path,
+    read_json,
+    resolve_pool_path,
+    utc_now,
     wilson_lower_bound,
 )
 from src.agents.rule_based_agent import is_rule_based_model_spec
@@ -34,7 +36,7 @@ from src.agents.rule_based_agent import is_rule_based_model_spec
 
 DEFAULT_WORKER_PYTHON = os.path.join("venv", "bin", "python")
 DEFAULT_LEADERBOARD_FILE = "arena_data/leaderboard.json"
-DEFAULT_VALIDATION_FILE = "decks/validation_opponents.json"
+DEFAULT_VALIDATION_FILE = str(resolve_pool_path("validation_opponents.json"))
 
 
 def _k_factor(games: int) -> int:

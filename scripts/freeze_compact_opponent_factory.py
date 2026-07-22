@@ -49,8 +49,10 @@ DEFAULT_TARGET_EVALUATION = (
 DEFAULT_GENERATED_DIR = (
     ROOT / "decks" / "generated" / "opponent_factory_v6_compact_potential"
 )
-ACTIVE_VALIDATION = ROOT / "decks" / "validation_opponents.json"
-ACTIVE_HOLDOUT = ROOT / "decks" / "holdout_opponents.json"
+from src.utils import resolve_pool_path
+
+ACTIVE_VALIDATION = resolve_pool_path("validation_opponents.json")
+ACTIVE_HOLDOUT = resolve_pool_path("holdout_opponents.json")
 HISTORICAL_VALIDATION = ROOT / "decks" / "historical" / "validation_opponents_v1.json"
 HISTORICAL_HOLDOUT = ROOT / "decks" / "historical" / "holdout_opponents_v1.json"
 

@@ -16,7 +16,7 @@ if "WANDB_MODE" not in os.environ:
 import wandb
 from wandb.integration.sb3 import WandbCallback
 from src.agents.rule_based_agent import is_rule_based_model_spec
-from src.utils import deck_display_name_for_path, model_display_name_for_path
+from src.utils import deck_display_name_for_path, model_display_name_for_path, resolve_deck_path, resolve_pool_path
 from src.league.experiment_registry import git_revision, registry_path, write_experiment
 
 TRAINING_USES_POTENTIAL_REWARDS = True
@@ -93,7 +93,8 @@ from src.training.training_health import TrainingHealthCallback, summarize_healt
 from src.training.custom_ppo import CustomPPO, PokemonTCGRecurrentPolicy
 
 def read_deck(deck_path):
-    df = pd.read_csv(deck_path, header=None)
+    resolved = resolve_deck_path(deck_path)
+    df = pd.read_csv(resolved, header=None)
     return df[0].tolist()
 
 def endless_learn_budget(current_timesteps: int) -> int:
@@ -205,6 +206,7 @@ def train():
     parser.add_argument("--opp-deck", type=str, help="Path to opponent deck.csv", default=None)
     parser.add_argument("--opp-model", type=str, help="Path to opponent model .zip", default=None)
     parser.add_argument("--opp-pool", type=str, default=None, help="JSON list of weighted opponent deck/model entries sampled per episode")
+    parser.add_argument("--sparse-rewards", action="store_true", help="Use sparse rewards (+1 for win, -1 for loss)")
     parser.add_argument("--num-envs", type=int, default=7, help="Number of parallel environments (default: 7)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--ent-coef", type=float, default=0.008, help="Entropy coefficient")
@@ -297,13 +299,12 @@ def train():
     opp_deck_path = args.opp_deck if args.opp_deck else args.deck
     from scripts.check_holdout_safe import check_paths
     reserved_files = ["decks/holdout_opponents.json", *args.reserved_opponents]
-    if os.path.exists("decks/validation_opponents.json"):
-        reserved_files.append("decks/validation_opponents.json")
     for holdout_file in dict.fromkeys(reserved_files):
-        if not os.path.exists(holdout_file):
+        resolved_path = resolve_pool_path(holdout_file)
+        if not resolved_path.is_file():
             continue
         check_paths(
-            holdout_file,
+            str(resolved_path),
             [opp_deck_path],
             [args.opp_model] if args.opp_model else [],
             [args.opp_pool] if args.opp_pool else [],

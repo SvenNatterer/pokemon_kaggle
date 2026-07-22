@@ -20,10 +20,11 @@ sys.path.insert(0, str(ROOT))
 
 from src.agents.rule_based_policy import RuleParameters, normalize_archetype
 from src.league.tournament import evaluate_vs_opponent
+from src.utils import resolve_pool_path
 
 
-DEFAULT_POOL = ROOT / "decks" / "rule_bot_meta_pool_v1.json"
-DEFAULT_PPO_POOL = ROOT / "decks" / "opponent_factory_v6_development_pool.json"
+DEFAULT_POOL = resolve_pool_path("rule_bot_meta_pool_v1.json")
+DEFAULT_PPO_POOL = resolve_pool_path("opponent_factory_v6_development_pool.json")
 
 TUNABLE_BOUNDS = {
     "attack_damage_scale": (0.06, 0.16),

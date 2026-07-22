@@ -18,6 +18,14 @@ Keep the project clearly organized:
 - tests in `tests/`
 - architecture and workflow documentation in `docs/`
 
+## Experimentation Rules
+
+When starting, modifying, or running any new experiment:
+- Always document the experiment in `docs/experiment_log.md` (hypothesis, config, Git commit/branch, rollback steps).
+- Ensure code changes are isolated to git branches or dedicated config files so they can be easily reverted.
+- Update `docs/experiment_log.md` with the final status (`Adopted` or `Reverted`).
+
+
 When refactoring:
 
 - preserve existing behavior where possible

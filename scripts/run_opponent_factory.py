@@ -13,10 +13,11 @@ import shutil
 import subprocess
 import sys
 from typing import Any
+from src.utils import resolve_pool_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_CONFIG = ROOT / "decks" / "opponent_factory_v6.json"
+DEFAULT_CONFIG = resolve_pool_path("opponent_factory_v6.json")
 VALID_SPLITS = {"training", "validation", "holdout"}
 
 
@@ -27,7 +28,15 @@ def read_json(path: Path) -> Any:
 
 def repo_path(value: str) -> Path:
     path = Path(value)
-    return path if path.is_absolute() else ROOT / path
+    if path.is_absolute():
+        return path
+    if (ROOT / path).is_file():
+        return ROOT / path
+    if (ROOT / "decks" / "pools" / path.name).is_file():
+        return ROOT / "decks" / "pools" / path.name
+    if (ROOT / "decks" / "deck_bank" / path.name).is_file():
+        return ROOT / "decks" / "deck_bank" / path.name
+    return ROOT / path
 
 
 def relative(path: Path) -> str:

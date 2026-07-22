@@ -17,10 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.league.tournament import evaluate_vs_opponent
+from src.utils import resolve_deck_path, resolve_pool_path
 
 
-DEFAULT_POOL = ROOT / "decks" / "rule_bot_meta_pool_v1.json"
-DEFAULT_OPPONENTS = ROOT / "decks" / "validation_opponents.json"
+DEFAULT_POOL = resolve_pool_path("rule_bot_meta_pool_v1.json")
+DEFAULT_OPPONENTS = resolve_pool_path("validation_opponents.json")
 DEFAULT_OUTPUT = ROOT / "reports" / "rule_bot_benchmark_v1.json"
 
 
@@ -58,7 +59,7 @@ def load_pool(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         if entry["label"] in labels:
             raise ValueError(f"duplicate pool label: {entry['label']}")
         labels.add(entry["label"])
-        deck = ROOT / entry["deck"]
+        deck = resolve_deck_path(entry["deck"])
         if not deck.is_file():
             raise ValueError(f"missing pool deck: {entry['deck']}")
         if sum(1 for line in deck.read_text(encoding="utf-8").splitlines() if line.strip()) != 60:

@@ -9,6 +9,10 @@ from src.agents.rule_based_agent import (
     is_rule_based_model_spec,
     rule_based_profile_from_spec,
 )
+from src.agents.kaggle_bots.wrapper import (
+    is_python_script_agent_spec,
+    load_python_script_agent,
+)
 from src.league.model_paths import strip_zip_suffix
 
 
@@ -22,6 +26,8 @@ def _resolve_load_path(model_path: str) -> str:
 def load_bot(model_path: str | None, env=None):
     if is_rule_based_model_spec(model_path):
         return RuleBasedPokemonAgent(spec=model_path)
+    if is_python_script_agent_spec(model_path):
+        return load_python_script_agent(model_path)
     if not model_path:
         raise ValueError("a PPO bot requires a model path")
 

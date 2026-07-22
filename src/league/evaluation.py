@@ -1,15 +1,14 @@
+"""Evaluation utilities for pair matches and agent assessment."""
+
+from __future__ import annotations
+
 import os
 import sys
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-# Add src to pythonpath so imports work
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-from src.env.env_wrapper import LEGACY_ACTION_SPACE_SIZE, PokemonTCGEnv, _fit_observation_to_model_space
-from src.training.custom_ppo import CustomPPO
-from src.league.model_paths import discover_deck_models, resolve_deck_model_path, strip_zip_suffix
 from src.agents.bot_loader import load_bot
+from src.env.env_wrapper import LEGACY_ACTION_SPACE_SIZE, PokemonTCGEnv, _fit_observation_to_model_space
 from src.utils import resolve_deck_path
 
 
@@ -36,26 +35,12 @@ def build_evaluation_env(
         kwargs["action_space_size"] = action_space_size
     return PokemonTCGEnv(**kwargs)
 
+
 def read_deck(deck_path):
     resolved = resolve_deck_path(deck_path)
     df = pd.read_csv(resolved, header=None)
     return df[0].tolist()
 
-def simulate_match(model1_path, deck1_path, model2_path, deck2_path, num_games=10):
-    """
-    Simulates matches between two CustomPPO models.
-    Returns the number of wins for model1.
-    """
-    deck1 = read_deck(deck1_path)
-    deck2 = read_deck(deck2_path)
-    
-    print(f"Evaluating {model1_path}...")
-    wins1 = evaluate_vs_baseline(model1_path, deck1_path, num_games)
-    
-    print(f"Evaluating {model2_path}...")
-    wins2 = evaluate_vs_baseline(model2_path, deck2_path, num_games)
-    
-    return wins1, wins2
 
 def evaluate_vs_baseline(model_path, deck_path, num_games=10):
     deck = read_deck(deck_path)
@@ -88,6 +73,7 @@ def evaluate_vs_baseline(model_path, deck_path, num_games=10):
             wins += 1
             
     return wins
+
 
 def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_games=10, return_details=False):
     deck1 = read_deck(deck1_path)
@@ -224,60 +210,3 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
             "perspective": perspective_results,
         }
     return result
-
-
-def discover_tournament_entries():
-    entries = []
-    for model in discover_deck_models():
-        deck_path = f"decks/deck_{model['deck_id']}.csv"
-        if not os.path.exists(deck_path):
-            continue
-
-        label = model["name"]
-        entries.append({
-            "label": label,
-            "model_path": model["path"],
-            "deck_path": deck_path,
-        })
-
-    return entries
-
-
-def main():
-    entries = discover_tournament_entries()
-    if not entries:
-        fallback_ids = range(1, 9)
-        entries = [
-            {
-                "label": f"ppo_deck_{i}",
-                "model_path": resolve_deck_model_path(i) or f"models/ppo_deck_{i}.zip",
-                "deck_path": f"decks/deck_{i}.csv",
-            }
-            for i in fallback_ids
-        ]
-    
-    scores = {entry["label"]: 0 for entry in entries}
-    
-    print("======================================================")
-    print("🏆 POKEMON TCG AGENT TOURNAMENT 🏆")
-    print("======================================================")
-    
-    # We will evaluate each agent's winrate over 20 games against the baseline
-    num_eval_games = 20
-    
-    for entry in entries:
-        print(f"\nTesting {entry['label']} ({entry['model_path']})...")
-        wins = evaluate_vs_baseline(entry["model_path"], entry["deck_path"], num_eval_games)
-        win_rate = (wins / num_eval_games) * 100
-        scores[entry["label"]] = win_rate
-        print(f"-> Win rate: {win_rate}% ({wins}/{num_eval_games})")
-        
-    print("\n======================================================")
-    print("FINAL LEADERBOARD")
-    print("======================================================")
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    for rank, (name, score) in enumerate(sorted_scores, 1):
-        print(f"{rank}. {name}: {score}% Win Rate")
-
-if __name__ == "__main__":
-    main()

@@ -7,12 +7,13 @@ import pytest
 
 from scripts.benchmark_rule_bots import load_pool, training_probabilities
 from src.agents.rule_based_agent import is_rule_based_model_spec
+from src.utils import resolve_deck_path, resolve_pool_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-POOL_PATH = ROOT / "decks" / "rule_bot_meta_pool_v1.json"
-GENERALIZATION_PATH = ROOT / "decks" / "rule_bot_generalization_v1.json"
-TRAINING_POOL_PATH = ROOT / "decks" / "rule_bot_training_pool_v1.json"
+POOL_PATH = resolve_pool_path("rule_bot_meta_pool_v1.json")
+GENERALIZATION_PATH = resolve_pool_path("rule_bot_generalization_v1.json")
+TRAINING_POOL_PATH = resolve_pool_path("rule_bot_training_pool_v1.json")
 
 
 def _reserved_decks(path: Path) -> set[str]:
@@ -38,25 +39,25 @@ def test_meta_pool_is_complete_weighted_and_loadable():
 def test_meta_pool_does_not_reuse_reserved_validation_or_holdout_decks():
     _payload, bots = load_pool(POOL_PATH)
     pool_decks = {entry["deck"] for entry in bots}
-    reserved = _reserved_decks(ROOT / "decks" / "validation_opponents.json")
-    reserved |= _reserved_decks(ROOT / "decks" / "holdout_opponents.json")
+    reserved = _reserved_decks(resolve_pool_path("validation_opponents.json"))
+    reserved |= _reserved_decks(resolve_pool_path("holdout_opponents.json"))
 
     assert pool_decks.isdisjoint(reserved)
 
 
 def test_reconstructed_kaggle_decks_have_exactly_sixty_cards():
     for relative in (
-        "decks/deck_grimmsnarl_ex_kaggle.csv",
-        "decks/deck_archaludon_ex_kaggle.csv",
-        "decks/deck_starmie_ex_kaggle_a.csv",
-        "decks/deck_starmie_ex_kaggle_b.csv",
-        "decks/deck_abomasnow_ex_kaggle_validation.csv",
-        "decks/deck_lucario_ex_kaggle_validation.csv",
-        "decks/deck_starmie_ex_kaggle_validation.csv",
-        "decks/deck_grimmsnarl_ex_kaggle_validation.csv",
-        "decks/deck_archaludon_ex_kaggle_validation.csv",
+        "deck_grimmsnarl_ex_kaggle.csv",
+        "deck_archaludon_ex_kaggle.csv",
+        "deck_starmie_ex_kaggle_a.csv",
+        "deck_starmie_ex_kaggle_b.csv",
+        "deck_abomasnow_ex_kaggle_validation.csv",
+        "deck_lucario_ex_kaggle_validation.csv",
+        "deck_starmie_ex_kaggle_validation.csv",
+        "deck_grimmsnarl_ex_kaggle_validation.csv",
+        "deck_archaludon_ex_kaggle_validation.csv",
     ):
-        cards = [line for line in (ROOT / relative).read_text(encoding="utf-8").splitlines() if line]
+        cards = [line for line in resolve_deck_path(relative).read_text(encoding="utf-8").splitlines() if line]
         assert len(cards) == 60
 
 
@@ -65,8 +66,8 @@ def test_generalization_decks_are_disjoint_from_training_and_reserved_sets():
     _generalization_payload, generalization_bots = load_pool(GENERALIZATION_PATH)
     pool_decks = {entry["deck"] for entry in pool_bots}
     generalization_decks = {entry["deck"] for entry in generalization_bots}
-    reserved = _reserved_decks(ROOT / "decks" / "validation_opponents.json")
-    reserved |= _reserved_decks(ROOT / "decks" / "holdout_opponents.json")
+    reserved = _reserved_decks(resolve_pool_path("validation_opponents.json"))
+    reserved |= _reserved_decks(resolve_pool_path("holdout_opponents.json"))
 
     assert len(generalization_bots) == 8
     assert generalization_decks.isdisjoint(pool_decks)

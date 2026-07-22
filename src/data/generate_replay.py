@@ -14,12 +14,13 @@ from src.cg.game import visualize_data
 import pandas as pd
 from src.agents.rule_based_agent import is_rule_based_model_spec
 from src.agents.bot_loader import load_bot
-from src.utils import atomic_write_json, deck_display_name_for_path
+from src.utils import atomic_write_json, deck_display_name_for_path, resolve_deck_path
 
 def read_deck(deck_path):
-    if not deck_path or not os.path.exists(deck_path):
+    resolved = resolve_deck_path(deck_path) if deck_path else None
+    if not resolved or not resolved.exists():
         return read_sample_deck()
-    df = pd.read_csv(deck_path, header=None)
+    df = pd.read_csv(resolved, header=None)
     return df[0].tolist()
 
 def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_path):

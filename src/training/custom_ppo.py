@@ -25,24 +25,6 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         kwargs.pop("compact_no_legacy", None)
         super().__init__(*args, **kwargs)
 
-    def load_state_dict(self, state_dict, strict=True):
-        if "action_net.weight" in state_dict:
-            weight_in = state_dict["action_net.weight"].shape[1]
-            if weight_in != self.action_net.in_features:
-                self.use_belief_actor = (weight_in == 128)
-                self.belief_dim = 64
-                old_action_net = self.action_net
-                device = old_action_net.weight.device
-                self.action_net = nn.Linear(weight_in, old_action_net.out_features).to(device)
-                if hasattr(self, "option_scorer") and hasattr(self.features_extractor, "option_encoder"):
-                    option_dim = int(getattr(self.features_extractor, "option_encoder")[-2].out_features)
-                    self.option_scorer = nn.Sequential(
-                        nn.Linear(weight_in + option_dim, 128),
-                        nn.ReLU(),
-                        nn.Linear(128, 1),
-                    ).to(device)
-        return super().load_state_dict(state_dict, strict=False)
-
         self.use_belief_actor = bool(use_belief_actor)
         self.belief_dim = int(belief_dim)
         self.detach_belief_actor = bool(detach_belief_actor)
@@ -92,6 +74,24 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
             if self.structured_options:
                 new_parameters.extend(self.option_scorer.parameters())
             self.optimizer.add_param_group({'params': new_parameters})
+
+    def load_state_dict(self, state_dict, strict=True):
+        if "action_net.weight" in state_dict:
+            weight_in = state_dict["action_net.weight"].shape[1]
+            if weight_in != self.action_net.in_features:
+                self.use_belief_actor = (weight_in == 128)
+                self.belief_dim = 64
+                old_action_net = self.action_net
+                device = old_action_net.weight.device
+                self.action_net = nn.Linear(weight_in, old_action_net.out_features).to(device)
+                if hasattr(self, "option_scorer") and hasattr(self.features_extractor, "option_encoder"):
+                    option_dim = int(getattr(self.features_extractor, "option_encoder")[-2].out_features)
+                    self.option_scorer = nn.Sequential(
+                        nn.Linear(weight_in + option_dim, 128),
+                        nn.ReLU(),
+                        nn.Linear(128, 1),
+                    ).to(device)
+        return super().load_state_dict(state_dict, strict=False)
 
     def _actor_latent_with_belief(self, latent_memory, latent_actor):
         if self.action_net.in_features == 128:
