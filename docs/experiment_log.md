@@ -43,7 +43,7 @@ Copy this block when starting a new experiment:
 
 ### [EXP-001] On-The-Fly Lookahead Tree Search Policy Distillation
 - **Date**: 2026-07-22
-- **Git Branch / Commit**: `exp/001-lookahead-distill` / `HEAD`
+- **Git Branch / Commit**: `exp/001-lookahead-distill` / `937242f13`
 - **Config File**: `configs/experiments/exp_001_lookahead_distill.yaml`
 - **Hypothesis**: Distilling bounded minimax tree search decisions into the PPO policy at 50% sampling rate on complex decisions improves tactical sequencing and Win Rate vs Dev Pool.
 - **Changes Made**:
