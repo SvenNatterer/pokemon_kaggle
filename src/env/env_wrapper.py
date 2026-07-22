@@ -1367,7 +1367,7 @@ class PokemonTCGEnv(gym.Env):
             })
 
         teacher_action = -1
-        if self.enable_lookahead_teacher and self.lookahead_teacher is not None:
+        if self.enable_lookahead_teacher and self.lookahead_teacher is not None and perspective == self.learner_perspective:
             if random.random() < self.teacher_sample_rate:
                 mask = result.get("action_mask", [])
                 option_count = int(np.count_nonzero(mask))

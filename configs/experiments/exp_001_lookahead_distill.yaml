@@ -12,9 +12,9 @@ opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
 
 # Lookahead Teacher Distillation Parameters
 distill_coef: 0.1
-teacher_sample_rate: 0.25  # Evaluate lookahead teacher on 25% of multi-choice decisions
+teacher_sample_rate: 0.10  # Evaluate lookahead teacher on 10% of learner decisions
 lookahead:
   max_depth: 5
   beam_width: 3
-  node_budget: 48
+  node_budget: 32
   max_combinations: 16
