@@ -1374,7 +1374,9 @@ class PokemonTCGEnv(gym.Env):
                 if option_count >= 2:
                     try:
                         from src.training.lookahead_teacher import build_search_hypotheses
-                        hypotheses = build_search_hypotheses(obs, perspective, card_data_by_id=self.lookahead_teacher.card_data_by_id)
+                        your_d = self.my_deck if perspective == self.learner_perspective else self.opponent_deck
+                        opp_d = self.opponent_deck if perspective == self.learner_perspective else self.my_deck
+                        hypotheses = build_search_hypotheses(obs, your_deck=your_d, opponent_deck=opp_d, card_data_by_id=self.lookahead_teacher.card_data_by_id)
                         decision = self.lookahead_teacher.choose(obs, result, perspective=perspective, hypotheses=hypotheses)
                         if decision is not None:
                             teacher_action = int(decision.action)
