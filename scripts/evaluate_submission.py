@@ -22,7 +22,7 @@ os.chdir(ROOT)
 sys.path.insert(0, ROOT)
 
 from src.league.model_paths import discover_deck_models, parse_deck_model_path
-from src.arena.arena_core import atomic_write_json, read_json, utc_now
+from src.utils import atomic_write_json, read_json, utc_now
 from src.agents.rule_based_agent import is_rule_based_model_spec
 from src.training.training_health import (
     health_gate,

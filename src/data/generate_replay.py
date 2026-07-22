@@ -14,8 +14,7 @@ from src.cg.game import visualize_data
 import pandas as pd
 from src.agents.rule_based_agent import is_rule_based_model_spec
 from src.agents.bot_loader import load_bot
-from src.arena.arena_core import atomic_write_json
-from src.arena.arena_core import deck_display_name_for_path
+from src.utils import atomic_write_json, deck_display_name_for_path
 
 def read_deck(deck_path):
     if not deck_path or not os.path.exists(deck_path):

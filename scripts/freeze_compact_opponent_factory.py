@@ -31,7 +31,7 @@ from scripts.run_compact_opponent_factory import (  # noqa: E402
     file_fingerprint,
     file_sha256,
 )
-from src.arena.arena_core import atomic_write_json  # noqa: E402
+from src.utils import atomic_write_json  # noqa: E402
 
 
 DEFAULT_REPAIR_SUMMARY = (

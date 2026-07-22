@@ -2,12 +2,12 @@ venv/
 __pycache__/
 *.py[cod]
 
-# Logs
+# Logs & Temporary Scratch
 *.log
 logs/
 wandb/
-arena_data/
-server_train.log
+scratch/
+.scratch/
 
 # Legacy runtime state locations (runtime data now lives in arena_data/)
 decks/generation.json

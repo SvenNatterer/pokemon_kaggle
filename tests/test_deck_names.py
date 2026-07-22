@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src import arena_core
+from src import utils
 
 
 class DeckNameTests(unittest.TestCase):
@@ -16,21 +16,21 @@ class DeckNameTests(unittest.TestCase):
                 json.dumps({"7": "Hydrapple ex", "bank_18": "Mega Lucario ex"}),
                 encoding="utf-8",
             )
-            with patch.object(arena_core, "ROOT", root):
-                self.assertEqual(arena_core.deck_name_for_path("decks/deck_7.csv"), "Ogerpon")
+            with patch.object(utils, "ROOT", root):
+                self.assertEqual(utils.deck_name_for_path("decks/deck_7.csv"), "Ogerpon")
                 self.assertEqual(
-                    arena_core.deck_display_name_for_path("decks/deck_7.csv"),
+                    utils.deck_display_name_for_path("decks/deck_7.csv"),
                     "Ogerpon",
                 )
                 self.assertEqual(
-                    arena_core.model_display_name_for_path("models/ppo_v5_deck_18.zip", "decks/deck_bank/bank_18.csv"),
+                    utils.model_display_name_for_path("models/ppo_v5_deck_18.zip", "decks/deck_bank/bank_18.csv"),
                     "V5 Mega Lucario ex",
                 )
                 self.assertEqual(
-                    arena_core.deck_name_for_path("decks/deck_bank/bank_18.csv"),
+                    utils.deck_name_for_path("decks/deck_bank/bank_18.csv"),
                     "Mega Lucario ex",
                 )
-                self.assertEqual(arena_core.deck_id_for_path("decks/deck_bank/bank_18.csv"), "bank_18")
+                self.assertEqual(utils.deck_id_for_path("decks/deck_bank/bank_18.csv"), "bank_18")
 
 
 if __name__ == "__main__":

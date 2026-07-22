@@ -16,7 +16,7 @@ if "WANDB_MODE" not in os.environ:
 import wandb
 from wandb.integration.sb3 import WandbCallback
 from src.agents.rule_based_agent import is_rule_based_model_spec
-from src.arena.arena_core import deck_display_name_for_path, model_display_name_for_path
+from src.utils import deck_display_name_for_path, model_display_name_for_path
 from src.league.experiment_registry import git_revision, registry_path, write_experiment
 
 TRAINING_USES_POTENTIAL_REWARDS = True
