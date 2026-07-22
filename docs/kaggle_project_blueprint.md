@@ -101,7 +101,7 @@ new-kaggle-agent/
     train.py               # einziger Trainingseinstieg
     evaluate.py            # eingefrorene Liga, Wilson, Perspektiven
     health.py              # Fehlerzähler und Promotion-Gate
-    arena/                 # kontinuierliche Diagnoseliga und Replays
+    evaluation_results/    # Evaluierungsergebnisse und Replays
   configs/
     training_pool.json
     validation_manifest.json

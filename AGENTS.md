@@ -10,6 +10,8 @@ Before making changes, inspect only the relevant files, callers, configurations,
 
 Prefer extending or refactoring existing logic. Do not create parallel implementations, duplicate helper functions, or similarly named replacement scripts.
 
+Never use silent fallbacks or hardcoded default values when resources (e.g. decks, models, configs) cannot be determined. Raise explicit errors immediately.
+
 Keep the project clearly organized:
 
 - production logic in `src/`

@@ -56,7 +56,7 @@ def test_default_profile_is_the_proven_v6_compact_baseline(monkeypatch):
 
     assert defaults["scalar_obs"] is False
     assert defaults["scalar_embeddings"] is False
-    assert "sparse_rewards" not in defaults
+    assert defaults["sparse_rewards"] is False
     assert "potential_rewards" not in defaults
     assert defaults["adaptive_stop"] is False
     assert defaults["pfsp_lite"] is True

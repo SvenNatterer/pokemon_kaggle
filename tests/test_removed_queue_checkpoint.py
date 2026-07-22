@@ -17,8 +17,8 @@ class RemovedArchitectureTests(unittest.TestCase):
             self.assertNotIn("--checkpoint-interval", source, path.as_posix())
             self.assertNotIn("--keep-checkpoints", source, path.as_posix())
 
-    def test_arena_worker_does_not_exist(self):
-        self.assertFalse((ROOT / "src" / "arena").exists())
+    def test_single_evaluator_worker_exists(self):
+        self.assertTrue((ROOT / "src" / "evaluation" / "evaluate_single.py").exists())
 
 
 if __name__ == "__main__":

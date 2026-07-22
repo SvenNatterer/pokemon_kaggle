@@ -34,7 +34,7 @@ class TestSubmissionSecurity(unittest.TestCase):
     def setUpClass(cls):
         cls.submission_main_path = os.path.join(ROOT, "submission", "main.py")
         cls.baseline_model_path = os.path.join(
-            ROOT, "models", "ppo_v6_mewtwo_quickwins_devpool.zip"
+            ROOT, "models", "ppo_v6_exp005_1m.zip"
         )
         cls.deck_path = os.path.join(ROOT, "decks", "deck_bank", "bank_18.csv")
         if not os.path.exists(cls.deck_path):

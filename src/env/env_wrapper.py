@@ -1370,9 +1370,8 @@ class PokemonTCGEnv(gym.Env):
         if self.enable_lookahead_teacher and self.lookahead_teacher is not None and perspective == self.learner_perspective:
             mask = result.get("action_mask", [])
             option_count = int(np.count_nonzero(mask))
-            # Critical decision heuristic: high option branching (>=4 options) or 3% random sampling on >=2 options
-            is_high_branching = option_count >= 4
-            if (is_high_branching or random.random() < self.teacher_sample_rate) and option_count >= 2:
+            # Sample lookahead teacher strictly according to teacher_sample_rate on decisions with >=2 options
+            if random.random() < self.teacher_sample_rate and option_count >= 2:
                 try:
                     from src.training.lookahead_teacher import build_search_hypotheses
                     your_d = self.my_deck if perspective == self.learner_perspective else self.opponent_deck

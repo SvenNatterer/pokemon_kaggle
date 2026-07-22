@@ -22,7 +22,7 @@ os.chdir(ROOT)
 sys.path.insert(0, ROOT)
 
 from src.league.model_paths import discover_deck_models, parse_deck_model_path
-from src.utils import atomic_write_json, read_json, utc_now
+from src.utils import atomic_write_json, read_json, resolve_pool_path, utc_now
 from src.agents.rule_based_agent import is_rule_based_model_spec
 from src.training.training_health import (
     health_gate,
@@ -31,12 +31,12 @@ from src.training.training_health import (
 )
 
 
-DEFAULT_HOLDOUT_FILE = "decks/holdout_opponents.json"
-DEFAULT_RESULTS_FILE = "arena_data/submission_results.json"
+DEFAULT_HOLDOUT_FILE = str(resolve_pool_path("holdout_opponents.json"))
+DEFAULT_RESULTS_FILE = "evaluation_results/submission_results.json"
 DEFAULT_WORKER_PYTHON = os.path.join("venv", "bin", "python")
 DEFAULT_GAMES = 100
 DEFAULT_PARALLEL_WORKERS = max(1, os.cpu_count() or 1)
-DEFAULT_CACHE_DIR = "arena_data/evaluation_cache"
+DEFAULT_CACHE_DIR = "evaluation_results/evaluation_cache"
 # Increment when the evaluator or game semantics change incompatibly.
 EVALUATION_CACHE_VERSION = 1
 _FILE_DIGESTS: dict[tuple[str, int, int], str] = {}
@@ -189,13 +189,10 @@ def entry_from_model(model: dict[str, Any]) -> dict[str, str] | None:
     }
 
 
-def entry_from_path(model_path: str) -> dict[str, str] | None:
+def entry_from_path(model_path: str, candidate_deck: str = "") -> dict[str, str] | None:
     model_path = normalize_path(model_path)
     if not model_path.endswith(".zip"):
         model_path = f"{model_path}.zip"
-    parsed = parse_deck_model_path(model_path)
-    if parsed is None:
-        raise ValueError(f"Cannot parse deck id from model path: {model_path}")
     if not os.path.exists(model_path):
         suggestions = candidate_suggestions(model_path)
         if suggestions:
@@ -203,10 +200,35 @@ def entry_from_path(model_path: str) -> dict[str, str] | None:
                 f"Model not found: {model_path}. Similar models: {', '.join(suggestions)}"
             )
         raise FileNotFoundError(f"Model not found: {model_path}")
-    return entry_from_model(parsed)
+
+    parsed = parse_deck_model_path(model_path)
+    if candidate_deck:
+        deck_path = normalize_path(candidate_deck)
+        deck_stem = Path(deck_path).stem
+        deck_id = deck_stem[5:] if deck_stem.startswith("deck_") else deck_stem
+    elif parsed is not None:
+        deck_id = parsed["deck_id"]
+        deck_path = str(deck_path_for_id(deck_id))
+    else:
+        raise ValueError(
+            f"Cannot determine candidate deck for model '{model_path}'. "
+            "Pass --candidate-deck <path> or use --candidate-spec."
+        )
+
+    if not os.path.exists(deck_path):
+        raise FileNotFoundError(
+            f"Candidate deck file not found: '{deck_path}' for model '{model_path}'."
+        )
+
+    return {
+        "label": Path(model_path).stem,
+        "deck_id": deck_id,
+        "model_path": model_path,
+        "deck_path": deck_path,
+    }
 
 
-def entry_from_spec(raw_spec: str | dict[str, Any]) -> dict[str, str]:
+def entry_from_spec(raw_spec: Any) -> dict[str, str]:
     """Build an evaluation candidate with an explicit model/profile and deck."""
     try:
         spec = json.loads(raw_spec) if isinstance(raw_spec, str) else dict(raw_spec)
@@ -234,24 +256,32 @@ def entry_from_spec(raw_spec: str | dict[str, Any]) -> dict[str, str]:
             "bot_type": "rule_based",
         }
 
-    entry = entry_from_path(model_path)
-    if entry is None:
-        raise ValueError(f"Cannot build candidate from model path: {model_path}")
-    entry.update({
+    return {
         "label": label,
         "deck_id": deck_id,
+        "model_path": model_path,
         "deck_path": deck_path,
         "bot_type": str(spec.get("bot_type") or "ppo"),
-    })
-    return entry
+    }
 
 
-def discover_entries(model_dir: str, include_variants: bool = True) -> list[dict[str, str]]:
+def discover_entries(model_dir: str, include_variants: bool = True, candidate_deck: str = "") -> list[dict[str, str]]:
     entries = []
     for model in discover_deck_models(model_dir=model_dir, include_variants=include_variants):
         entry = entry_from_model(model)
         if entry is not None:
             entries.append(entry)
+
+    if not entries and os.path.isdir(model_dir):
+        for f in sorted(os.listdir(model_dir)):
+            if f.endswith(".zip") and not f.startswith("."):
+                full_path = os.path.join(model_dir, f)
+                try:
+                    entry = entry_from_path(full_path, candidate_deck=candidate_deck)
+                    if entry:
+                        entries.append(entry)
+                except (ValueError, FileNotFoundError):
+                    pass
     return entries
 
 
@@ -296,14 +326,15 @@ def load_or_create_holdout(args: argparse.Namespace) -> dict[str, Any]:
 def discover_candidates(args: argparse.Namespace) -> list[dict[str, str]]:
     if getattr(args, "candidate_spec", None):
         return [entry_from_spec(spec) for spec in args.candidate_spec]
+    candidate_deck = getattr(args, "candidate_deck", "") or ""
     if args.candidate:
         candidates = []
         for path in args.candidate:
-            entry = entry_from_path(path)
+            entry = entry_from_path(path, candidate_deck=candidate_deck)
             if entry is not None:
                 candidates.append(entry)
         return candidates
-    return discover_entries(args.candidate_pool, include_variants=args.include_variants)
+    return discover_entries(args.candidate_pool, include_variants=args.include_variants, candidate_deck=candidate_deck)
 
 
 def wilson_lower_bound(successes: float, total: int, z: float = 1.96) -> float:
@@ -344,7 +375,7 @@ def evaluate_pair(
 ) -> dict[str, Any]:
     command = [
         worker_python,
-        "src/arena/evaluate_single.py",
+        "src/evaluation/evaluate_single.py",
         candidate["model_path"],
         candidate["deck_path"],
         opponent["model_path"],
@@ -613,6 +644,11 @@ def main() -> int:
         "--candidate-spec",
         action="append",
         help="JSON candidate with label, model_path (or rule_based:profile), and deck_path.",
+    )
+    parser.add_argument(
+        "--candidate-deck",
+        default="",
+        help="Explicit deck CSV path for candidates when not embedded in filename.",
     )
     parser.add_argument("--max-candidates", type=int, default=0)
     parser.add_argument("--max-opponents", type=int, default=0)

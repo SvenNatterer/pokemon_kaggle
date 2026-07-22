@@ -4,6 +4,8 @@ import argparse
 import signal
 import time
 import pandas as pd
+from pathlib import Path
+from typing import Any
 
 # Add src to pythonpath so imports work
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -190,18 +192,106 @@ def make_env(
         return Monitor(env)
     return _init
 
-def train():
-    if os.path.exists("stop_factory"):
-        print("Stop file 'stop_factory' detected. Deleting 'stop_factory' and exiting with code 1 to terminate opponent factory...")
-        try:
-            os.remove("stop_factory")
-        except Exception:
-            pass
-        sys.exit(1)
+DEFAULT_QUEUE_PATH = "configs/training_queue.json"
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--deck", type=str, required=True, help="Path to deck.csv")
-    parser.add_argument("--model-name", type=str, required=True, help="Name of the model to save")
+
+def load_yaml_config(config_path: str) -> dict:
+    import yaml
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def add_to_queue(queue_path: str, item: str) -> None:
+    target_path = queue_path or DEFAULT_QUEUE_PATH
+    os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+    queue_data = []
+    if os.path.exists(target_path):
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                queue_data = json.load(f)
+                if not isinstance(queue_data, list):
+                    queue_data = []
+        except Exception:
+            queue_data = []
+
+    entry: Any = item
+    try:
+        entry = json.loads(item)
+    except Exception:
+        entry = item.strip()
+
+    queue_data.append(entry)
+
+    temp_path = f"{target_path}.tmp.{os.getpid()}"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(queue_data, f, indent=2)
+    os.replace(temp_path, target_path)
+    print(f"Added item to training queue ({target_path}): {entry}")
+
+
+def pop_next_queue_item(queue_path: str) -> Any:
+    target_path = queue_path or DEFAULT_QUEUE_PATH
+    if not os.path.exists(target_path):
+        return None
+    try:
+        with open(target_path, "r", encoding="utf-8") as f:
+            queue_data = json.load(f)
+            if not isinstance(queue_data, list) or len(queue_data) == 0:
+                return None
+    except Exception:
+        return None
+
+    item = queue_data.pop(0)
+
+    temp_path = f"{target_path}.tmp.{os.getpid()}"
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(queue_data, f, indent=2)
+    os.replace(temp_path, target_path)
+
+    return item
+
+
+def apply_config_dict(args: argparse.Namespace, config_dict: dict) -> None:
+    mapping = {
+        "learning_rate": "lr",
+        "lr": "lr",
+        "deck": "deck",
+        "model_name": "model_name",
+        "model": "model_name",
+        "timesteps": "timesteps",
+        "n_steps": "n_steps",
+        "batch_size": "batch_size",
+        "n_epochs": "n_epochs",
+        "ent_coef": "ent_coef",
+        "clip_range": "clip_range",
+        "target_kl": "target_kl",
+        "aux_coef": "aux_coef",
+        "distill_coef": "distill_coef",
+        "teacher_sample_rate": "teacher_sample_rate",
+        "opp_pool": "opp_pool",
+        "opp_deck": "opp_deck",
+        "opp_model": "opp_model",
+        "seed": "seed",
+        "sparse_rewards": "sparse_rewards",
+        "endless": "endless",
+    }
+    for k, v in config_dict.items():
+        if k in mapping:
+            setattr(args, mapping[k], v)
+        elif hasattr(args, k):
+            setattr(args, k, v)
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Pokemon TCG RL Training Script")
+    parser.add_argument("--deck", type=str, default=None, help="Path to deck.csv")
+    parser.add_argument("--model-name", type=str, default=None, help="Name of the model to save")
+    parser.add_argument("--config", type=str, default=None, help="Path to YAML experiment config file.")
+    parser.add_argument("--queue", "--cue", nargs="?", const=DEFAULT_QUEUE_PATH, default=DEFAULT_QUEUE_PATH, help="Path to training queue file.")
+    parser.add_argument("--add-to-queue", "--add-to-cue", type=str, default=None, help="Add a training spec to the queue file and exit.")
     parser.add_argument("--timesteps", type=int, default=1000000, help="Number of training timesteps. Use 0 for endless training.")
     parser.add_argument("--endless", action="store_true", help="Train forever until interrupted.")
     mode = parser.add_mutually_exclusive_group()
@@ -302,8 +392,64 @@ def train():
         pfsp_lite=True,
         health_gate=True,
     )
-    args = parser.parse_args()
+    return parser
 
+
+def parse_args_with_config(argv: list[str] | None = None, parser: argparse.ArgumentParser | None = None) -> argparse.Namespace:
+    if parser is None:
+        parser = build_arg_parser()
+    args = parser.parse_args() if argv is None else parser.parse_args(argv)
+    if args.config:
+        yaml_dict = load_yaml_config(args.config)
+        cli_supplied = set()
+        if argv is not None:
+            for tok in argv:
+                if tok.startswith("--"):
+                    flag = tok.lstrip("-").split("=")[0].replace("-", "_")
+                    cli_supplied.add(flag)
+        for k, v in yaml_dict.items():
+            mapped_key = "lr" if k in ("learning_rate", "lr") else ("model_name" if k in ("model", "model_name") else k)
+            if mapped_key not in cli_supplied and hasattr(args, mapped_key):
+                setattr(args, mapped_key, v)
+
+    # Defaults for deck and model_name if missing
+    if not args.deck:
+        if os.path.exists("decks/deck_bank/bank_18.csv"):
+            args.deck = "decks/deck_bank/bank_18.csv"
+        elif os.path.exists("decks/deck_18.csv"):
+            args.deck = "decks/deck_18.csv"
+    if args.deck and not args.model_name:
+        deck_stem = Path(args.deck).stem
+        args.model_name = f"models/ppo_{deck_stem}.zip"
+    return args
+
+
+def parse_queue_item(item: Any, parser: argparse.ArgumentParser) -> argparse.Namespace:
+    if isinstance(item, dict):
+        args = parser.parse_args([])
+        if "config" in item:
+            yaml_dict = load_yaml_config(item["config"])
+            apply_config_dict(args, yaml_dict)
+        apply_config_dict(args, item)
+        return args
+    elif isinstance(item, str):
+        item_str = item.strip()
+        if item_str.endswith(".yaml") or item_str.endswith(".yml") or item_str.startswith("configs/"):
+            return parse_args_with_config(["--config", item_str], parser)
+        elif item_str.startswith("{"):
+            try:
+                dict_val = json.loads(item_str)
+                return parse_queue_item(dict_val, parser)
+            except Exception:
+                pass
+        import shlex
+        tokens = shlex.split(item_str)
+        return parse_args_with_config(tokens, parser)
+    else:
+        raise ValueError(f"Unrecognized queue item: {item}")
+
+
+def run_single_training(args: argparse.Namespace) -> None:
     opp_deck_path = args.opp_deck if args.opp_deck else args.deck
     from scripts.check_holdout_safe import check_paths
     reserved_files = ["decks/holdout_opponents.json", *args.reserved_opponents]
@@ -322,7 +468,6 @@ def train():
     
     opponent_description = f"pool {args.opp_pool}" if opponent_pool else opp_deck_path
     print(f"Initializing environment with {args.num_envs} workers for deck {args.deck} against {opponent_description}...")
-    # Vectorized environment - must use SubprocVecEnv because cg library uses a global singleton
     env = SubprocVecEnv([
         make_env(
             args.deck,
@@ -422,7 +567,6 @@ def train():
             )
         if loaded_belief_actor and not args.belief_actor:
             print("Loaded a belief-actor model; continuing with its saved architecture.")
-        # Update parameters on loaded model
         model.c_aux = args.aux_coef
         model.ent_coef = args.ent_coef
         model.learning_rate = args.lr
@@ -486,13 +630,12 @@ def train():
     run_suffix = "endless" if endless_training else str(args.timesteps)
     run_name = os.environ.get("WANDB_NAME", f"D{deck_id}_vs_D{opp_id}_{run_suffix}")
     
-    # Initialize wandb
     run = wandb.init(
         project="pokemon_kaggle",
         name=run_name,
         group=os.environ.get("WANDB_RUN_GROUP", f"deck_{deck_id}"),
         config=vars(args),
-        sync_tensorboard=True, # auto-upload sb3's tensorboard metrics
+        sync_tensorboard=True,
         monitor_gym=True,
         save_code=True,
         dir="/tmp",
@@ -505,7 +648,7 @@ def train():
     status_total = 0 if endless_training else args.timesteps
     live_status_callback = LiveStatusCallback(action_text=action_text, total_timesteps=status_total)
     wandb_callback = WandbCallback(
-        gradient_save_freq=0, # disable saving gradients to save space
+        gradient_save_freq=0,
         verbose=2,
     )
     reward_callback = RewardBreakdownCallback()
@@ -554,7 +697,50 @@ def train():
         signal.signal(signal.SIGTERM, old_sigterm_handler)
         run.finish()
 
+
+def train(argv: list[str] | None = None) -> None:
+    if os.path.exists("stop_factory"):
+        print("Stop file 'stop_factory' detected. Deleting 'stop_factory' and exiting with code 1 to terminate opponent factory...")
+        try:
+            os.remove("stop_factory")
+        except Exception:
+            pass
+        sys.exit(1)
+
+    parser = build_arg_parser()
+    args = parse_args_with_config(argv, parser)
+
+    queue_path = args.queue if isinstance(args.queue, str) and args.queue else (DEFAULT_QUEUE_PATH if args.queue is not None else None)
+
+    if args.add_to_queue is not None:
+        target_queue = queue_path or DEFAULT_QUEUE_PATH
+        add_to_queue(target_queue, args.add_to_queue)
+        return
+
+    has_initial_job = bool(args.deck and args.model_name) or bool(args.config)
+
+    if has_initial_job:
+        run_single_training(args)
+
+    if queue_path is not None or not has_initial_job:
+        effective_queue = queue_path or DEFAULT_QUEUE_PATH
+        print(f"Monitoring training queue: {effective_queue}")
+        while True:
+            item = pop_next_queue_item(effective_queue)
+            if item is None:
+                print(f"Training queue '{effective_queue}' is empty. Processing complete.")
+                break
+            print(f"\n========================================================")
+            print(f"Processing queued item: {item}")
+            print(f"========================================================\n")
+            try:
+                item_args = parse_queue_item(item, parser)
+                run_single_training(item_args)
+            except Exception as err:
+                print(f"Error executing queued item {item}: {err}")
+
+
 if __name__ == "__main__":
-    # Create models directory
     os.makedirs("models", exist_ok=True)
     train()
+

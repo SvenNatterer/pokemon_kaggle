@@ -77,7 +77,7 @@ scripts/submit_latest_submission.sh \
 - `scripts/evaluate_submission.py`: the single frozen-holdout evaluator.
 - `src/train.py`: the single training implementation.
 
-Runtime data lives in ignored `arena_data/`. Writes use a flushed sibling temp
+Runtime data lives in ignored `evaluation_results/`. Writes use a flushed sibling temp
 file followed by `os.replace`. There is no persistent or in-memory match queue.
 The worker chooses the next pair only after the preceding match is persisted.
 A PID file plus an advisory file lock prevents duplicate workers.
@@ -125,7 +125,7 @@ not affect the arena ranking.
 
 ## Persistence and reset
 
-`arena_data/matches.json` is the authoritative match journal; leaderboard data
+`evaluation_results/matches.json` is the authoritative match journal; leaderboard data
 is reproducible from it. A record contains IDs, timestamp, both bots/decks/types,
 aggregate W/L/D, reason, total turns, perspective/start player, Elo before/after,
 error, replay reference, and schema version. Evaluation progress/history is
@@ -210,24 +210,7 @@ The underlying native game engine does not currently expose deterministic RNG
 seeding. Player perspectives are balanced, but exact paired game seeds cannot
 yet be guaranteed; do not describe repeated runs as bit-for-bit reproducible.
 
-### 4. Promote only through gates
-
-The current champion is a small pointer file, not a copy of a model. Promotion
-is rejected if the candidate has excessive player-perspective bias or does not
-beat the existing champion's Wilson lower bound by the requested margin:
-
-```bash
-PYTHONPATH=. venv/bin/python scripts/promote_champion.py \
-  --selection logs/v5_selection.json \
-  --champion-file models/champion.json \
-  --min-wilson-improvement 0.01 \
-  --max-perspective-gap 0.10
-```
-
-Run it first with `--dry-run` when introducing the process. The champion is
-never overwritten by training itself.
-
-### 5. Use the arena for diagnosis, not final selection
+### 4. Use the arena for diagnosis, not final selection
 
 Keep the champion, its predecessor, historical strong snapshots and diverse
 rule/PPO bots in the arena. After 20--50 arena batches, inspect ELO/Wilson,

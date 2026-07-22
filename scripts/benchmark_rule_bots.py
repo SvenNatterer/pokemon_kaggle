@@ -42,7 +42,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    resolved = resolve_pool_path(path)
+    return json.loads(resolved.read_text(encoding="utf-8"))
 
 
 def load_pool(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:

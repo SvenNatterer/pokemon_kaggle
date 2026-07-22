@@ -129,17 +129,114 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
     print(f"Replay saved to {out_path}!")
     env.close()
 
+def slugify(text: str) -> str:
+    cleaned = "".join(c if c.isalnum() else "_" for c in str(text).lower())
+    return "_".join(filter(None, cleaned.split("_")))
+
+
+def generate_replay_batch(
+    model_a_path: str,
+    deck_a_path: str,
+    pool_path: str | None = None,
+    model_b_path: str | None = None,
+    deck_b_path: str | None = None,
+    out_dir: str | None = None,
+    num_games: int | None = None,
+) -> list[str]:
+    from pathlib import Path
+
+    out_directory = Path(out_dir) if out_dir else Path("replays") / "batch_eval"
+    out_directory.mkdir(parents=True, exist_ok=True)
+    generated_files: list[str] = []
+
+    opponents = []
+    if pool_path and Path(pool_path).exists():
+        pool_file = Path(pool_path)
+        print(f"Loading opponent pool from {pool_file}...")
+        pool_data = json.loads(pool_file.read_text(encoding="utf-8"))
+        if isinstance(pool_data, list):
+            for idx, bot in enumerate(pool_data, start=1):
+                label = bot.get("label", f"bot_{idx}")
+                opponents.append({
+                    "label": label,
+                    "model": bot.get("model", ""),
+                    "deck": bot.get("deck", ""),
+                })
+    elif model_b_path or deck_b_path:
+        opponents.append({
+            "label": "opponent",
+            "model": model_b_path or "",
+            "deck": deck_b_path or "",
+        })
+
+    if not opponents:
+        # Fallback: create default opponent sample based on deck bank if available
+        deck_bank_dir = Path("decks") / "deck_bank"
+        if deck_bank_dir.exists():
+            deck_files = sorted(list(deck_bank_dir.glob("*.csv")))
+            n = num_games if num_games else min(5, len(deck_files))
+            for i in range(n):
+                d_file = deck_files[i % len(deck_files)]
+                opponents.append({
+                    "label": d_file.stem,
+                    "model": "rule_based:random",
+                    "deck": str(d_file),
+                })
+        else:
+            opponents.append({
+                "label": "random_bot",
+                "model": "rule_based:random",
+                "deck": deck_a_path,
+            })
+
+    print(f"Generating replays for {len(opponents)} matches...")
+    print(f"Candidate Model: {model_a_path}")
+    print(f"Candidate Deck:  {deck_a_path}")
+    print(f"Output Directory:{out_directory}\n")
+
+    for idx, opp in enumerate(opponents, start=1):
+        slug = slugify(opp["label"])
+        out_file = out_directory / f"replay_vs_{slug}.json"
+        if len(opponents) > 1 and (out_directory / f"replay_{idx:02d}_vs_{slug}.json").exists():
+            out_file = out_directory / f"replay_{idx:02d}_vs_{slug}.json"
+
+        print(f"[{idx}/{len(opponents)}] Playing vs {opp['label']} ({slug})...")
+        try:
+            generate_replay(
+                model_a_path=str(model_a_path),
+                deck_a_path=str(deck_a_path),
+                model_b_path=str(opp["model"]),
+                deck_b_path=str(opp["deck"]),
+                out_path=str(out_file),
+            )
+            print(f"  -> Saved replay to {out_file}\n")
+            generated_files.append(str(out_file))
+        except Exception as err:
+            print(f"  -> Replay generation failed for {opp['label']}: {err}\n", file=sys.stderr)
+
+    return generated_files
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-a", type=str, default="")
     parser.add_argument("--deck-a", type=str, default="")
     parser.add_argument("--model-b", type=str, default="")
     parser.add_argument("--deck-b", type=str, default="")
+    parser.add_argument("--pool", type=str, default="")
     parser.add_argument("--out", type=str, default="replays/replay.json")
     args = parser.parse_args()
-    
-    out_path = args.out
-    if not os.path.isabs(out_path):
-        out_path = os.path.join(os.path.dirname(__file__), "..", out_path)
-        
-    generate_replay(args.model_a, args.deck_a, args.model_b, args.deck_b, out_path)
+
+    if args.pool:
+        generate_replay_batch(
+            model_a_path=args.model_a,
+            deck_a_path=args.deck_a,
+            pool_path=args.pool,
+            out_dir=args.out,
+        )
+    else:
+        out_path = args.out
+        if not os.path.isabs(out_path):
+            out_path = os.path.join(os.path.dirname(__file__), "..", out_path)
+        generate_replay(args.model_a, args.deck_a, args.model_b, args.deck_b, out_path)
+

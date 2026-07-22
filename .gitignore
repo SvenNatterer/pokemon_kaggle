@@ -9,7 +9,11 @@ wandb/
 scratch/
 .scratch/
 
-# Legacy runtime state locations (runtime data now lives in arena_data/)
+# Evaluation & Runtime Data
+evaluation_results/*
+!evaluation_results/.gitkeep
+arena_data/
+
 decks/generation.json
 decks/status.json
 decks/submission_results.json
