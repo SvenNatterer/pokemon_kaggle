@@ -165,6 +165,8 @@ def make_env(
     sparse_rewards=False,
     opponent_pool=None,
     rotate_perspective=False,
+    action_space_size=V6_ACTION_SPACE_SIZE,
+    structured_v2=True,
     enable_lookahead_teacher=False,
     teacher_sample_rate=0.50,
 ):
