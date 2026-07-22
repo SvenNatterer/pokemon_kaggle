@@ -165,8 +165,8 @@ def make_env(
     sparse_rewards=False,
     opponent_pool=None,
     rotate_perspective=False,
-    action_space_size=V6_ACTION_SPACE_SIZE,
-    structured_v2=True,
+    enable_lookahead_teacher=False,
+    teacher_sample_rate=0.50,
 ):
     def _init():
         import torch
@@ -182,6 +182,8 @@ def make_env(
             rotate_perspective=rotate_perspective,
             action_space_size=action_space_size,
             structured_v2=structured_v2,
+            enable_lookahead_teacher=enable_lookahead_teacher,
+            teacher_sample_rate=teacher_sample_rate,
         )
         return Monitor(env)
     return _init
@@ -216,6 +218,10 @@ def train():
     parser.add_argument("--batch-size", type=int, default=1024, help="Minibatch size")
     parser.add_argument("--n-steps", type=int, default=2048, help="Steps per env per rollout")
     parser.add_argument("--aux-coef", type=float, default=0.1, help="Weight for hidden-card count auxiliary loss")
+    parser.add_argument("--distill-coef", type=float, default=0.1, help="Weight for policy distillation loss")
+    parser.add_argument("--enable-lookahead-teacher", action="store_true", default=True, help="Enable lookahead teacher sampling")
+    parser.add_argument("--no-lookahead-teacher", dest="enable_lookahead_teacher", action="store_false")
+    parser.add_argument("--teacher-sample-rate", type=float, default=0.50, help="Sampling rate for lookahead teacher on complex decisions")
     parser.add_argument("--no-belief-actor", dest="belief_actor", action="store_false", help="Disable hidden-card belief actor")
     parser.add_argument("--belief-dim", type=int, default=64, help="Size of the learned belief embedding used by --belief-actor")
     parser.add_argument("--no-belief-detach", dest="belief_detach", action="store_false", help="Allow PPO loss gradients into the belief encoder")
@@ -325,6 +331,8 @@ def train():
             rotate_perspective=args.rotate_perspective,
             action_space_size=action_space_size,
             structured_v2=not args.scalar_obs,
+            enable_lookahead_teacher=args.enable_lookahead_teacher,
+            teacher_sample_rate=args.teacher_sample_rate,
         )
         for _ in range(args.num_envs)
     ])
@@ -453,6 +461,7 @@ def train():
             clip_range=args.clip_range,
             target_kl=args.target_kl,
             c_aux=args.aux_coef,
+            distill_coef=args.distill_coef,
             seed=args.seed,
             device="cpu",
             tensorboard_log="logs/",

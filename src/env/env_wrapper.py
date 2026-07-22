@@ -4,6 +4,7 @@ import ctypes
 import numpy as np
 import os
 import json
+import random
 
 from src.cg.game import battle_start, battle_select, battle_finish
 from src.cg.sim import Battle, V6ObservationBuffer, lib
@@ -327,6 +328,7 @@ class PokemonTCGEnv(gym.Env):
             "vector": spaces.Box(low=-2000, high=2000, shape=(self.vector_dim,), dtype=np.float32),
             "action_mask": spaces.Box(low=0, high=1, shape=(self.max_options,), dtype=np.int8),
             "aux_target": spaces.Box(low=0, high=1, shape=(self.aux_dim,), dtype=np.float32),
+            "teacher_action": spaces.Box(low=-1, high=self.max_options, shape=(1,), dtype=np.int32),
         }
         
         if self.structured_v2:
@@ -1363,6 +1365,23 @@ class PokemonTCGEnv(gym.Env):
                 "aux_opponent_deck_ids": aux_opp_deck,
                 "aux_opponent_prize_ids": aux_opp_prize,
             })
+
+        teacher_action = -1
+        if self.enable_lookahead_teacher and self.lookahead_teacher is not None:
+            if random.random() < self.teacher_sample_rate:
+                mask = result.get("action_mask", [])
+                option_count = int(np.count_nonzero(mask))
+                if option_count >= 2:
+                    try:
+                        from src.training.lookahead_teacher import build_search_hypotheses
+                        hypotheses = build_search_hypotheses(obs, perspective, card_data_by_id=self.lookahead_teacher.card_data_by_id)
+                        decision = self.lookahead_teacher.choose(obs, result, perspective=perspective, hypotheses=hypotheses)
+                        if decision is not None:
+                            teacher_action = int(decision.action)
+                    except Exception:
+                        teacher_action = -1
+
+        result["teacher_action"] = np.array([teacher_action], dtype=np.int32)
         return result
 
     def _get_obs(self, perspective=0, pending_selection=None, action_space_size=None, force_structured=None):
@@ -1641,6 +1660,22 @@ class PokemonTCGEnv(gym.Env):
             res = {"vector": vec, "action_mask": mask, "aux_target": aux_target, **structured}
         else:
             res = {"vector": vec, "action_mask": mask, "aux_target": aux_target}
+
+        teacher_action = -1
+        if self.enable_lookahead_teacher and self.lookahead_teacher is not None:
+            if random.random() < self.teacher_sample_rate:
+                option_count = int(np.count_nonzero(mask))
+                if option_count >= 2:
+                    try:
+                        from src.training.lookahead_teacher import build_search_hypotheses
+                        hypotheses = build_search_hypotheses(obs, perspective, card_data_by_id=self.lookahead_teacher.card_data_by_id)
+                        decision = self.lookahead_teacher.choose(obs, res, perspective=perspective, hypotheses=hypotheses)
+                        if decision is not None:
+                            teacher_action = int(decision.action)
+                    except Exception:
+                        teacher_action = -1
+
+        res["teacher_action"] = np.array([teacher_action], dtype=np.int32)
 
         if self.zone_aux_targets and not use_structured:
             res.update({
