@@ -226,7 +226,7 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
             aux_input = belief_embedding if self.use_belief_actor else latent_pi
             aux_logits = self.aux_head(aux_input)
         
-        return values, log_prob, entropy, aux_logits
+        return values, log_prob, entropy, aux_logits, mean_actions
 
 class CustomPPO(RecurrentPPO):
     def __init__(self, *args, c_aux=0.5, distill_coef=0.1, **kwargs):
@@ -304,7 +304,7 @@ class CustomPPO(RecurrentPPO):
                 if self.use_sde:
                     self.policy.reset_noise(self.batch_size)
 
-                values, log_prob, entropy, aux_logits = self.policy.evaluate_actions_with_aux(
+                values, log_prob, entropy, aux_logits, action_logits = self.policy.evaluate_actions_with_aux(
                     rollout_data.observations,
                     actions,
                     rollout_data.lstm_states,
