@@ -40,3 +40,22 @@ Copy this block when starting a new experiment:
   - Baseline model trained and validated against dev pool.
 - **Status**: Adopted (Baseline)
 - **Rollback Instructions**: N/A (Baseline state)
+
+### [EXP-001] On-The-Fly Lookahead Tree Search Policy Distillation
+- **Date**: 2026-07-22
+- **Git Branch / Commit**: `exp/001-lookahead-distill` / `HEAD`
+- **Config File**: `configs/experiments/exp_001_lookahead_distill.yaml`
+- **Hypothesis**: Distilling bounded minimax tree search decisions into the PPO policy at 50% sampling rate on complex decisions improves tactical sequencing and Win Rate vs Dev Pool.
+- **Changes Made**:
+  - `configs/experiments/exp_001_lookahead_distill.yaml`: Config file with lookahead distillation hyperparameters.
+  - `src/training/custom_ppo.py`: Added distillation loss head and rollout teacher sampling.
+  - `src/env/env_wrapper.py`: Added teacher target tracking in environment observations.
+- **Results**:
+  - Training in progress / pending validation.
+- **Status**: `[ ] In Progress`
+- **Rollback Instructions**:
+  ```bash
+  git checkout main
+  rm configs/experiments/exp_001_lookahead_distill.yaml
+  ```
+

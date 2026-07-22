@@ -225,10 +225,21 @@ class PokemonTCGEnv(gym.Env):
         action_space_size=V6_ACTION_SPACE_SIZE,
         structured_v2=True,
         zone_aux_targets=False,
+        enable_lookahead_teacher=False,
+        teacher_sample_rate=0.50,
     ):
         super().__init__()
         self.zone_aux_targets = zone_aux_targets
         self.structured_v2 = structured_v2
+        self.enable_lookahead_teacher = enable_lookahead_teacher
+        self.teacher_sample_rate = float(teacher_sample_rate)
+        self.lookahead_teacher = None
+        if self.enable_lookahead_teacher:
+            try:
+                from src.training.lookahead_teacher import LookaheadTeacher, LookaheadConfig
+                self.lookahead_teacher = LookaheadTeacher(config=LookaheadConfig(node_budget=96, max_depth=5))
+            except Exception:
+                self.lookahead_teacher = None
         self.learner_perspective = learner_perspective
         self.rotate_perspective = rotate_perspective
         if action_space_size not in {LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE}:

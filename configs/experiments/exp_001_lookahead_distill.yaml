@@ -1,0 +1,19 @@
+# EXP-001: On-The-Fly Lookahead Tree Search Policy Distillation Config
+algorithm: PPO
+learning_rate: 0.0003
+n_steps: 2048
+batch_size: 64
+n_epochs: 10
+gamma: 0.99
+gae_lambda: 0.95
+clip_range: 0.2
+ent_coef: 0.01
+
+# Lookahead Teacher Distillation Parameters
+distill_coef: 0.1
+teacher_sample_rate: 0.50  # Evaluate lookahead teacher on 50% of multi-choice decisions
+lookahead:
+  max_depth: 5
+  beam_width: 3
+  node_budget: 96
+  max_combinations: 16

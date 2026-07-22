@@ -229,9 +229,10 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         return values, log_prob, entropy, aux_logits
 
 class CustomPPO(RecurrentPPO):
-    def __init__(self, *args, c_aux=0.5, **kwargs):
+    def __init__(self, *args, c_aux=0.5, distill_coef=0.1, **kwargs):
         super().__init__(*args, **kwargs)
         self.c_aux = c_aux
+        self.distill_coef = distill_coef
 
     def set_parameters(self, load_path_or_dict, exact_match=True, device="auto"):
         if isinstance(load_path_or_dict, dict):
@@ -274,7 +275,7 @@ class CustomPPO(RecurrentPPO):
         self._update_learning_rate(self.policy.optimizer)
         
         entropy_losses = []
-        pg_losses, value_losses, aux_losses = [], [], []
+        pg_losses, value_losses, aux_losses, distill_losses = [], [], [], []
         aux_precision_at_20, aux_recall_at_20, aux_count_scaled_mae = [], [], []
         clip_fractions = []
 
@@ -397,9 +398,19 @@ class CustomPPO(RecurrentPPO):
                                 ).mean().item()
                             )
 
+                distill_loss = None
+                if self.distill_coef > 0.0 and "teacher_action" in rollout_data.observations:
+                    teacher_actions = rollout_data.observations["teacher_action"].squeeze(-1)
+                    valid_teacher_mask = (teacher_actions >= 0) & mask
+                    if valid_teacher_mask.any():
+                        distill_loss = F.cross_entropy(action_logits[valid_teacher_mask], teacher_actions[valid_teacher_mask].long())
+                        distill_losses.append(distill_loss.item())
+
                 loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
                 if aux_loss is not None:
                     loss = loss + self.c_aux * aux_loss
+                if distill_loss is not None:
+                    loss = loss + self.distill_coef * distill_loss
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -434,6 +445,7 @@ class CustomPPO(RecurrentPPO):
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/aux_loss", np.mean(aux_losses) if aux_losses else 0.0)
+        self.logger.record("train/distill_loss", np.mean(distill_losses) if distill_losses else 0.0)
         self.logger.record(
             "train/aux_precision_at_20",
             np.mean(aux_precision_at_20) if aux_precision_at_20 else 0.0,
