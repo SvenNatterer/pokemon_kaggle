@@ -1,7 +1,7 @@
 import math
 import unittest
 
-from src.adaptive_stopping import LowKLAndEntropyStagnationCallback
+from src.env.adaptive_stopping import LowKLAndEntropyStagnationCallback
 
 
 class FakeLogger:

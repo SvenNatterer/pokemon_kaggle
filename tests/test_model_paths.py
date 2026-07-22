@@ -1,6 +1,6 @@
 import unittest
 
-from src.model_paths import parse_deck_model_path
+from src.league.model_paths import parse_deck_model_path
 
 
 class ModelPathTests(unittest.TestCase):

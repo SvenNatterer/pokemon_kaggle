@@ -20,8 +20,8 @@ if "src.cg" in sys.modules:
     sys.modules["cg.api"] = sys.modules["src.cg.api"]
     sys.modules["cg.game"] = sys.modules["src.cg.game"]
 
-from src.tournament import evaluate_vs_opponent
-from src.model_paths import resolve_deck_model_path
+from src.league.tournament import evaluate_vs_opponent
+from src.league.model_paths import resolve_deck_model_path
 import pandas as pd
 
 
@@ -34,16 +34,8 @@ class TestSubmissionSecurity(unittest.TestCase):
     def setUpClass(cls):
         cls.submission_main_path = os.path.join(ROOT, "submission", "main.py")
         cls.baseline_model_path = os.path.join(
-            ROOT, "models", "training_v6", "ppo_v5b_deck_bank_18_compute_ft_aux0.zip"
+            ROOT, "models", "ppo_v6_mewtwo_quickwins_devpool.zip"
         )
-        if not os.path.exists(cls.baseline_model_path):
-            for candidate in [
-                os.path.join(ROOT, "models", "ppo_v6_deck_bank_18.zip"),
-                os.path.join(ROOT, "models", "ppo_deck_0.zip"),
-            ]:
-                if os.path.exists(candidate):
-                    cls.baseline_model_path = candidate
-                    break
         cls.deck_path = os.path.join(ROOT, "decks", "deck_bank", "bank_18.csv")
         if not os.path.exists(cls.deck_path):
             cls.deck_path = os.path.join(ROOT, "decks", "deck_0.csv")

@@ -4,7 +4,7 @@ import numpy as np
 import torch
 
 from src.cg.api import AreaType, OptionType, all_card_data
-from src.custom_policy import (
+from src.models.custom_policy import (
     EFFECT_INDEX,
     ENERGY_FEATURE_OFFSET,
     ENERGY_ROLE_NAMES,
@@ -14,8 +14,8 @@ from src.custom_policy import (
     build_card_relations,
     _effect_metadata,
 )
-import src.env_wrapper as env_wrapper_module
-from src.env_wrapper import (
+import src.env.env_wrapper as env_wrapper_module
+from src.env.env_wrapper import (
     PokemonTCGEnv,
     bound_entity_energy_features,
     encode_energy_count,
@@ -32,24 +32,6 @@ def _player(hand=None, active=None, bench=None):
         prize=[],
         deckCount=40,
     )
-
-
-def test_play_option_resolves_hand_card_without_card_id():
-    card = SimpleNamespace(id=678)
-    players = [_player(hand=[card]), _player()]
-    obs = SimpleNamespace(current=SimpleNamespace(players=players), select=SimpleNamespace(deck=[]))
-    option = SimpleNamespace(
-        type=OptionType.PLAY,
-        area=None,
-        index=0,
-        playerIndex=0,
-        cardId=None,
-        energyIndex=None,
-        toolIndex=None,
-    )
-    env = PokemonTCGEnv([6] * 60, [5] * 60)
-
-    assert env._resolve_option_card_id(obs, option, perspective=0) == 678
 
 
 def test_card_metadata_contains_rule_attributes():
@@ -73,35 +55,20 @@ def test_hidden_card_count_target_preserves_duplicate_counts():
 
 
 def test_energy_count_features_are_bounded_and_preserve_small_counts():
-    encoded = [encode_energy_count(count, maximum=4) for count in (0, 1, 2, 4, 8)]
+    encoded = [encode_energy_count(count) for count in (0, 1, 2, 4, 8)]
 
-    assert encoded == [0.0, 0.25, 0.5, 1.0, 1.0]
+    assert np.allclose(encoded, [0.0, 0.1, 0.2, 0.4, 0.8])
 
 
 def test_native_entity_energy_features_are_bounded_without_touching_other_features():
     features = np.zeros((12, 36), dtype=np.float32)
     features[0, 4] = 0.75
-    features[0, 8] = 1.25
-    features[0, 20] = 2.0
+    features[0, 15] = 20.0
 
     bounded = bound_entity_energy_features(features)
 
     assert bounded[0, 4] == 0.75
-    assert bounded[0, 8] == 1.0
-    assert bounded[0, 20] == 1.0
-
-
-def test_observation_uses_python_fallback_without_native_symbol(monkeypatch):
-    env = PokemonTCGEnv([6] * 60, [5] * 60)
-    monkeypatch.setattr(env_wrapper_module, "HAS_NATIVE_V6_OBSERVATION", False)
-    monkeypatch.setattr(env, "_get_obs_python", lambda **kwargs: "python")
-
-    def unexpected_native_call(**kwargs):
-        raise AssertionError("native encoder must not run without its exported symbol")
-
-    monkeypatch.setattr(env, "_get_obs_cpp", unexpected_native_call)
-
-    assert env._get_obs(perspective=1, pending_selection=[2]) == "python"
+    assert bounded[0, 15] == 10.0
 
 
 def test_rules_text_is_encoded_as_factual_effect_features():

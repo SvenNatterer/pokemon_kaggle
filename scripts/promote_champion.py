@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from src.arena_core import atomic_write_json, utc_now
+from src.arena.arena_core import atomic_write_json, utc_now
 
 
 def main() -> int:

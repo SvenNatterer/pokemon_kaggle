@@ -16,7 +16,7 @@ from typing import Any, Sequence
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.tournament import evaluate_vs_opponent
+from src.league.tournament import evaluate_vs_opponent
 
 
 DEFAULT_POOL = ROOT / "decks" / "rule_bot_meta_pool_v1.json"

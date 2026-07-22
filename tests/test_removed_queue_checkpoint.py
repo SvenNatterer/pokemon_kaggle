@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class RemovedArchitectureTests(unittest.TestCase):
     def test_train_has_no_periodic_checkpoint_interface(self):
-        source = (ROOT / "src" / "train.py").read_text(encoding="utf-8")
+        source = (ROOT / "src" / "training" / "train.py").read_text(encoding="utf-8")
         for forbidden in ("--checkpoint-interval", "--keep-checkpoints", "RotatingCheckpointCallback", "latest_checkpoint"):
             self.assertNotIn(forbidden, source)
 
@@ -18,7 +18,7 @@ class RemovedArchitectureTests(unittest.TestCase):
             self.assertNotIn("--keep-checkpoints", source, path.as_posix())
 
     def test_arena_worker_does_not_import_legacy_arena_queue(self):
-        source = (ROOT / "src" / "arena_worker.py").read_text(encoding="utf-8")
+        source = (ROOT / "src" / "arena" / "arena_worker.py").read_text(encoding="utf-8")
         self.assertNotIn("arena_utils", source)
         self.assertNotIn("manage_queue", source)
 

@@ -47,10 +47,10 @@ try:
 except ImportError:
     from cg.api import Observation, to_observation_class
 
-from src.custom_ppo import CustomPPO
+from src.training.custom_ppo import CustomPPO
 
 
-from src.env_wrapper import (
+from src.env.env_wrapper import (
     LEGACY_ACTION_SPACE_SIZE,
     PokemonTCGEnv,
     advance_selection,

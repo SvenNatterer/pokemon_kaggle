@@ -1,0 +1,8 @@
+# Default Neural Network & Feature Extractor Architecture Configuration
+features_extractor_class: PokemonTCGFeatureExtractor
+features_extractor_kwargs:
+  features_dim: 512
+  feature_variant: "compact"
+net_arch:
+  pi: [256, 256]
+  vf: [256, 256]

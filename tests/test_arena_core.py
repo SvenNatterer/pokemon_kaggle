@@ -8,15 +8,19 @@ import unittest
 from unittest import mock
 import zipfile
 
-from src.arena_core import (
+from src.arena.arena_core import (
+    ARENA_DIR,
+    DEFAULT_ELO,
     ArenaStore,
     Participant,
+    deck_id_for_path,
     discover_participants,
+    model_display_name_for_path,
     rank_participants,
     select_matchup,
     wilson_lower_bound,
 )
-from src.arena_match import load_holdout_results
+from src.arena.arena_match import load_holdout_results
 
 
 def participant(bot_id: str, status: str = "loadable") -> Participant:
@@ -96,8 +100,8 @@ class ParticipantDiscoveryTests(unittest.TestCase):
             for path in (root / "models" / "ppo_deck_1.zip", root / "models" / "backup" / "ppo_v4_deck_1_checkpoint_1.zip"):
                 with zipfile.ZipFile(path, "w") as archive:
                     archive.writestr("data", "{}")
-            with mock.patch("src.arena_core.ROOT", root), mock.patch(
-                "src.arena_core.PARTICIPANT_MANIFEST", root / "decks" / "arena_agents.json"
+            with mock.patch("src.arena.arena_core.ROOT", root), mock.patch(
+                "src.arena.arena_core.PARTICIPANT_MANIFEST", root / "decks" / "arena_agents.json"
             ):
                 values = discover_participants()
         ids = {value.bot_id for value in values}
@@ -115,8 +119,8 @@ class ParticipantDiscoveryTests(unittest.TestCase):
             (root / "decks" / "arena_agents.json").write_text('{"agents": []}', encoding="utf-8")
             with zipfile.ZipFile(root / "models" / "ppo_deck_99.zip", "w") as archive:
                 archive.writestr("data", "{}")
-            with mock.patch("src.arena_core.ROOT", root), mock.patch(
-                "src.arena_core.PARTICIPANT_MANIFEST", root / "decks" / "arena_agents.json"
+            with mock.patch("src.arena.arena_core.ROOT", root), mock.patch(
+                "src.arena.arena_core.PARTICIPANT_MANIFEST", root / "decks" / "arena_agents.json"
             ):
                 value = discover_participants()[0]
         self.assertEqual(value.load_status, "unloadable")
@@ -142,8 +146,8 @@ class ParticipantDiscoveryTests(unittest.TestCase):
                 with zipfile.ZipFile(root / "models" / filename, "w") as archive:
                     archive.writestr("data", "{}")
 
-            with mock.patch("src.arena_core.ROOT", root), mock.patch(
-                "src.arena_core.PARTICIPANT_MANIFEST", manifest
+            with mock.patch("src.arena.arena_core.ROOT", root), mock.patch(
+                "src.arena.arena_core.PARTICIPANT_MANIFEST", manifest
             ):
                 values = discover_participants()
 
@@ -170,7 +174,7 @@ class PersistenceTests(unittest.TestCase):
                     {"candidate": "bot_a", "score_rate": 0.8},
                 ]}},
             ]), encoding="utf-8")
-            with mock.patch("src.arena_match.ROOT", root):
+            with mock.patch("src.arena.arena_match.ROOT", root):
                 results = load_holdout_results()
 
         self.assertEqual(results["bot_a"]["score_rate"], 0.8)

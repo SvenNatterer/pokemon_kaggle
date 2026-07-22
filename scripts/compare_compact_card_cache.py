@@ -15,10 +15,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.arena_core import atomic_write_json, read_json, utc_now
-from src.bot_loader import load_bot
-from src.env_wrapper import _fit_observation_to_model_space
-from src.tournament import build_evaluation_env, model_action_space_size, read_deck
+from src.arena.arena_core import atomic_write_json, read_json, utc_now
+from src.agents.bot_loader import load_bot
+from src.env.env_wrapper import _fit_observation_to_model_space
+from src.league.tournament import build_evaluation_env, model_action_space_size, read_deck
 
 
 DEFAULT_MODEL = "models/architecture_ablation/ppo_v6_deck_bank_54_compact.zip"

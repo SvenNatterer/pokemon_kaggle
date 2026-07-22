@@ -1,4 +1,4 @@
-from src.training_health import (
+from src.training.training_health import (
     OPTION_COUNT_HISTOGRAM_SIZE,
     health_gate,
     summarize_health,
@@ -46,7 +46,7 @@ def test_health_gate_rejects_each_p0_corruption_signal():
 
 
 def test_training_health_callback_aggregates_cumulative_worker_snapshots():
-    from src.train import TrainingHealthCallback
+    from src.training.train import TrainingHealthCallback
 
     class Logger:
         def __init__(self):
@@ -97,7 +97,7 @@ def test_training_health_callback_aggregates_cumulative_worker_snapshots():
 
 
 def test_training_health_callback_stops_on_invalid_learner_action():
-    from src.train import TrainingHealthCallback
+    from src.training.train import TrainingHealthCallback
 
     callback = TrainingHealthCallback(fail_fast=True)
     callback.locals = {

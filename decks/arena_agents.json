@@ -137,26 +137,6 @@
       "version": "rule-v3-aggressive",
       "tags": ["current", "rule_based", "arena"],
       "enabled": true
-    },
-    {
-      "id": "v5b_champion_mega_lucario_bank18",
-      "name": "V5b Champion · Mega Lucario ex",
-      "agent_type": "ppo",
-      "model_path": "models/training_v6/ppo_v5b_deck_bank_18_compute_ft_aux0.zip",
-      "deck_path": "decks/deck_bank/bank_18.csv",
-      "version": "v5b",
-      "tags": ["v5b", "champion", "arena"],
-      "enabled": true
-    },
-    {
-      "id": "foundation__ppo_v6_deck_bank_54_base_a",
-      "name": "Foundation · Alakazam 1M (Base A)",
-      "agent_type": "ppo",
-      "model_path": "models/foundation/ppo_v6_deck_bank_54_base_a.zip",
-      "deck_path": "decks/deck_bank/bank_54.csv",
-      "version": "v6",
-      "tags": ["v6", "foundation", "arena"],
-      "enabled": true
     }
   ]
 }

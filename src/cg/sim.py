@@ -93,6 +93,32 @@ lib.SearchStep.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.POINTER(ctype
 
 lib.SearchEnd.argtypes = [ctypes.c_void_p]
 
+lib.GetV6Observation.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.POINTER(V6ObservationBuffer)]
+
+lib.Select.restype = ctypes.c_int
+lib.Select.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+
+lib.VisualizeData.restype = ctypes.c_char_p
+lib.VisualizeData.argtypes = [ctypes.c_void_p]
+
+lib.SearchBegin.restype = ctypes.c_char_p
+lib.SearchBegin.argtypes = [
+    ctypes.c_void_p,
+    ctypes.c_char_p,
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.POINTER(ctypes.c_int),
+    ctypes.c_int]
+
+lib.SearchStep.restype = ctypes.c_char_p
+lib.SearchStep.argtypes = [ctypes.c_void_p, ctypes.c_int64, ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+
+lib.SearchEnd.argtypes = [ctypes.c_void_p]
+
 lib.SearchRelease.argtypes = [ctypes.c_void_p, ctypes.c_int64]
 
 lib.AllCard.restype = ctypes.c_char_p
@@ -102,3 +128,6 @@ lib.AllAttack.restype = ctypes.c_char_p
 class Battle:
     battle_ptr = None
     obs = None
+
+
+HAS_NATIVE_V6_OBSERVATION = hasattr(lib, "GetV6Observation")

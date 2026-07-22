@@ -5,8 +5,8 @@ import subprocess
 import tempfile
 from unittest import mock
 
-from src.arena_core import ArenaStore, Participant
-from src.arena_match import execute_match, should_schedule_replay
+from src.arena.arena_core import ArenaStore, Participant
+from src.arena.arena_match import execute_match, should_schedule_replay
 
 
 def participant(bot_id: str) -> Participant:
@@ -47,8 +47,8 @@ class ArenaReplayTests(unittest.TestCase):
     def test_match_subprocess_uses_devnull_for_stdin(self):
         completed = mock.Mock(returncode=0, stdout='RESULT:1,0,0\nDETAIL:{"total_turns": 1}', stderr="")
         with tempfile.TemporaryDirectory() as temp, mock.patch(
-            "src.arena_match.discover_participants", return_value=[self.first, self.second]
-        ), mock.patch("src.arena_match.subprocess.run", return_value=completed) as run:
+            "src.arena.arena_match.discover_participants", return_value=[self.first, self.second]
+        ), mock.patch("src.arena.arena_match.subprocess.run", return_value=completed) as run:
             execute_match(ArenaStore(temp), games=1)
         self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
 

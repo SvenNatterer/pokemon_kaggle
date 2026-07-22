@@ -7,7 +7,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 
-from src.arena_core import (
+from src.arena.arena_core import (
     discover_participants,
     read_json,
     atomic_write_json,
@@ -15,7 +15,7 @@ from src.arena_core import (
     ArenaStore,
     DEFAULT_ELO,
 )
-from src.arena_match import _k_factor, load_holdout_results
+from src.arena.arena_match import _k_factor, load_holdout_results
 
 def main():
     # 1. Load active participants

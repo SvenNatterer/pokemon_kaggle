@@ -18,18 +18,6 @@
     "weight": 1.0
   },
   {
-    "label": "V5b Champion Mega Lucario ex",
-    "deck": "decks/deck_bank/bank_18.csv",
-    "model": "models/training_v6/ppo_v5b_deck_bank_18_compute_ft_aux0.zip",
-    "weight": 1.0
-  },
-  {
-    "label": "Foundation Alakazam 1M (Base A)",
-    "deck": "decks/deck_bank/bank_54.csv",
-    "model": "models/foundation/ppo_v6_deck_bank_54_base_a.zip",
-    "weight": 1.0
-  },
-  {
     "label": "Mega Abomasnow ex rule-based balanced",
     "deck": "decks/deck_abomasnow_ex.csv",
     "model": "rule_based:balanced",

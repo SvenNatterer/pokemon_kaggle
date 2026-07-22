@@ -1,7 +1,7 @@
 import unittest
 
 from src.cg.api import all_card_data
-from src.limitless_deck_scraper import (
+from src.data.limitless_deck_scraper import (
     CardPrintResolver,
     LimitlessCardEntry,
     parse_limitless_deck_html,

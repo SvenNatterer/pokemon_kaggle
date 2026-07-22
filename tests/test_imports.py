@@ -12,8 +12,8 @@ class SubmissionImportTests(unittest.TestCase):
     def test_packaged_submission_imports_in_isolated_process(self):
         result = subprocess.run(
             [sys.executable, "-c", "import main; print('imports ok')"],
-            cwd=ROOT / "tests" / "test_sub",
-            env={**os.environ, "PYTHONPATH": str(ROOT / "tests" / "test_sub")},
+            cwd=ROOT / "submission",
+            env={**os.environ, "PYTHONPATH": f"{ROOT / 'submission'}:{ROOT}"},
             capture_output=True,
             text=True,
             timeout=30,

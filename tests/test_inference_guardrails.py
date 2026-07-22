@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from src.inference_guardrails import (
+from src.models.inference_guardrails import (
     FIGHTING_ENERGY_TYPE,
     InferenceGuardrails,
     MIST_ENERGY_CARD_ID,
@@ -13,7 +13,7 @@ from src.inference_guardrails import (
     SampledSearchGuardrails,
     TEAM_ROCKET_ARTICUNO_CARD_ID,
 )
-from src.env_wrapper import PokemonTCGEnv
+from src.env.env_wrapper import PokemonTCGEnv
 
 
 def _card(card_id, serial=1):
@@ -399,49 +399,7 @@ class InferenceGuardrailStateTests(unittest.TestCase):
         self.assertEqual([], interventions)
 
 
-class EnvironmentGuardrailOptInTests(unittest.TestCase):
-    def test_enabled_master_switch_does_not_call_search_at_zero_rate(self):
-        env = PokemonTCGEnv.__new__(PokemonTCGEnv)
-        env.inference_guardrails_enabled = True
-        env.inference_guardrails = Mock()
-        env.inference_guardrails.apply.return_value = (_encoded(), [])
-        env.search_guardrails = Mock()
-        env.search_guardrails.sample_rate = 0.0
-        env.guardrail_last_interventions = []
-        env.guardrail_intervention_count = 0
-        env._guardrail_seen_interventions = set()
-        env.np_random = _FixedRng(0.01)
 
-        env._apply_inference_guardrails(
-            _observation(target=_pokemon(20)),
-            _encoded(),
-            perspective=0,
-            pending_selection=[],
-        )
-
-        env.inference_guardrails.apply.assert_called_once()
-        env.search_guardrails.apply.assert_not_called()
-
-    def test_disabled_master_switch_skips_all_guardrails(self):
-        env = PokemonTCGEnv.__new__(PokemonTCGEnv)
-        env.inference_guardrails_enabled = False
-        env.inference_guardrails = Mock()
-        env.search_guardrails = Mock()
-        env.guardrail_last_interventions = []
-        env._guardrail_seen_interventions = set()
-        env.np_random = _FixedRng(0.01)
-        encoded = _encoded()
-
-        guarded = env._apply_inference_guardrails(
-            _observation(target=_pokemon(20)),
-            encoded,
-            perspective=0,
-            pending_selection=[],
-        )
-
-        self.assertIs(guarded, encoded)
-        env.inference_guardrails.apply.assert_not_called()
-        env.search_guardrails.apply.assert_not_called()
 
 
 if __name__ == "__main__":

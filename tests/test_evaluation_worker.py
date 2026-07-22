@@ -14,7 +14,7 @@ from scripts.evaluate_submission import (
     pair_cache_signature,
     parse_result,
 )
-from src.evaluation_worker import create_result_file
+from src.arena.evaluation_worker import create_result_file
 
 
 class EvaluationWorkerTests(unittest.TestCase):
@@ -168,7 +168,7 @@ class EvaluationWorkerTests(unittest.TestCase):
 
     def test_each_run_gets_a_unique_sanitized_result_file(self):
         with tempfile.TemporaryDirectory() as temp, mock.patch(
-            "src.evaluation_worker.ROOT", Path(temp)
+            "src.arena.evaluation_worker.ROOT", Path(temp)
         ):
             first = create_result_file("bot / one")
             second = create_result_file("bot / one")
@@ -181,7 +181,7 @@ class EvaluationWorkerTests(unittest.TestCase):
     def test_multi_candidate_result_filename_stays_below_filesystem_limit(self):
         bot_ids = ",".join(f"stage_snapshots__very_long_checkpoint_{index}_" + "x" * 60 for index in range(20))
         with tempfile.TemporaryDirectory() as temp, mock.patch(
-            "src.evaluation_worker.ROOT", Path(temp)
+            "src.arena.evaluation_worker.ROOT", Path(temp)
         ):
             result_file = create_result_file(bot_ids)
             selection_file = result_file.with_name(result_file.stem + "_selection.json")

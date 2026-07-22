@@ -70,7 +70,7 @@ def test_default_profile_is_the_proven_v6_compact_baseline(monkeypatch):
 
 
 def test_reward_logging_excludes_state_potential_but_keeps_paid_difference():
-    from src.train import RewardBreakdownCallback
+    from src.training.train import RewardBreakdownCallback
 
     class Logger:
         def __init__(self):
@@ -108,7 +108,7 @@ def test_reward_logging_excludes_state_potential_but_keeps_paid_difference():
 
 
 def test_endless_training_uses_one_non_overflowing_learn_budget():
-    from src.train import endless_learn_budget
+    from src.training.train import endless_learn_budget
 
     current_timesteps = 2_250_752
     budget = endless_learn_budget(current_timesteps)

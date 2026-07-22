@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from unittest import mock
 
-from src.arena_control import ArenaController
-from src.arena_core import ArenaStore
-from src.arena_worker import is_temporary_roster_error
+from src.arena.arena_control import ArenaController
+from src.arena.arena_core import ArenaStore
+from src.arena.arena_worker import is_temporary_roster_error
 
 
 class ArenaControllerTests(unittest.TestCase):
@@ -20,7 +20,7 @@ class ArenaControllerTests(unittest.TestCase):
 
     def test_duplicate_start_is_rejected(self):
         self.store.set_state("running")
-        with mock.patch("src.arena_control._pid", return_value=123):
+        with mock.patch("src.arena.arena_control._pid", return_value=123):
             success, _ = self.controller.start()
         self.assertFalse(success)
 
@@ -32,14 +32,14 @@ class ArenaControllerTests(unittest.TestCase):
 
     def test_stop_without_worker_is_idempotent(self):
         self.store.set_state("paused")
-        with mock.patch("src.arena_control._pid", return_value=None):
+        with mock.patch("src.arena.arena_control._pid", return_value=None):
             success, _ = self.controller.stop()
         self.assertTrue(success)
         self.assertEqual(self.store.state()["state"], "stopped")
 
     def test_reset_preserves_external_files(self):
         self.store.append_match({"match_id": "one"})
-        with mock.patch("src.arena_control._pid", return_value=None):
+        with mock.patch("src.arena.arena_control._pid", return_value=None):
             self.controller.reset()
         self.assertEqual(self.store.matches(), [])
 

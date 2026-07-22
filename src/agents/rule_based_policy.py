@@ -122,8 +122,10 @@ class RuleBotSpec:
     def model_spec(self) -> str:
         if self.version == "v3" and self.archetype == "generic":
             base = f"rule_based:{self.profile}"
-        else:
+        elif self.version == "v4":
             base = f"rule_based:v4:{self.archetype}:{self.variant}"
+        else:
+            base = f"rule_based:v6:{self.archetype}:{self.variant}"
         if not self.parameter_overrides:
             return base
         return f"{base}?{urlencode(self.parameter_overrides)}"
@@ -149,9 +151,10 @@ def parse_rule_based_spec(value: Any) -> RuleBotSpec | None:
     if len(parts) == 1:
         return RuleBotSpec(parameter_overrides=overrides)
     if len(parts) == 2 and parts[1] in RULE_BASED_PROFILES:
-        return RuleBotSpec(profile=parts[1], parameter_overrides=overrides)
-    if len(parts) not in {2, 3, 4} or parts[1] != "v4":
+        return RuleBotSpec(version="v3", profile=parts[1], parameter_overrides=overrides)
+    if len(parts) not in {2, 3, 4} or parts[1] not in {"v4", "v6"}:
         return None
+    version = parts[1]
     archetype = normalize_archetype(parts[2] if len(parts) >= 3 else "generic")
     variant = parts[3] if len(parts) == 4 else "balanced"
     if archetype not in ARCHETYPE_PLANS or variant not in RULE_BASED_VARIANTS:
@@ -163,7 +166,7 @@ def parse_rule_based_spec(value: Any) -> RuleBotSpec | None:
         "control": "defensive",
     }[variant]
     return RuleBotSpec(
-        version="v4",
+        version=version,
         profile=profile,
         archetype=archetype,
         variant=variant,

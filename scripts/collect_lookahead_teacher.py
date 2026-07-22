@@ -15,15 +15,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.bot_loader import load_bot
+from src.agents.bot_loader import load_bot
 from src.cg.api import to_observation_class
-from src.env_wrapper import (
+from src.env.env_wrapper import (
     LEGACY_ACTION_SPACE_SIZE,
-    V6_ACTION_SPACE_SIZE,
     PokemonTCGEnv,
     _fit_observation_to_model_space,
 )
-from src.lookahead_teacher import (
+from src.training.lookahead_teacher import (
     LookaheadConfig,
     LookaheadTeacher,
     build_search_hypotheses,

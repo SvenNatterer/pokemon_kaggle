@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-import src.server as server
-from src.arena_core import ArenaStore, Participant
+import src.arena.server as server
+from src.arena.arena_core import ArenaStore, Participant
 
 
 class FakeProcess:

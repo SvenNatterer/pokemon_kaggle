@@ -13,13 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = ROOT / "kaggle_bundle" / "pokemon_kaggle_v6_bundle.zip"
 
 MODEL_FILES = (
-    "models/foundation/ppo_v6_deck_bank_54_base_a.zip",
-    "models/foundation/ppo_v6_deck_bank_55_base_b.zip",
-    "models/foundation/ppo_v6_deck_bank_56_base_c.zip",
-    "models/ppo_v4_deck_bank_47.zip",
-    "models/archive-12-07-26/ppo_v4_deck_bank_19.zip",
-    "models/archive-12-07-26/ppo_v4_deck_bank_79.zip",
-    "models/archive-12-07-26/ppo_v4_deck_bank_37_opp_stage2.zip",
+    "models/ppo_v6_mewtwo_quickwins_devpool.zip",
+    "models/foundation/compact_potential/ppo_v6_deck_bank_54_compact_a.zip",
+    "models/foundation/compact_potential/ppo_v6_deck_bank_55_compact_b.zip",
+    "models/foundation/compact_potential/ppo_v6_deck_bank_56_compact_c.zip",
 )
 
 SOURCE_ROOTS = (

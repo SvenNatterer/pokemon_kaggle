@@ -10,8 +10,8 @@ from src.agents.rule_based_agent import (
     is_rule_based_model_spec,
     rule_based_spec_from_spec,
 )
-from src.bot_loader import load_bot
-from src.env_wrapper import OPTION_FEATURE_DIM
+from src.agents.bot_loader import load_bot
+from src.env.env_wrapper import OPTION_FEATURE_DIM
 
 
 def _first_card(card_type: CardType, predicate=None) -> int:

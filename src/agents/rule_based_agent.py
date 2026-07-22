@@ -9,6 +9,11 @@ from typing import Any
 import numpy as np
 
 from src.cg.api import AreaType, CardType, OptionType, SelectContext, all_attack, all_card_data
+from src.agents.rule_based_policy import (
+    RuleBotSpec,
+    RuleParameters,
+    parse_rule_based_spec,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,8 +23,8 @@ MAX_ENCODED_OPTIONS = 65
 VECTOR_TURN_INDEX = 0
 VECTOR_MY_HAND_INDEX = 8
 VECTOR_MY_PRIZE_INDEX = 10
-VECTOR_OPP_HAND_INDEX = 18
-VECTOR_OPP_PRIZE_INDEX = 20
+VECTOR_OPP_HAND_INDEX = 108
+VECTOR_OPP_PRIZE_INDEX = 110
 VECTOR_SELECT_CONTEXT_INDEX = 250
 VECTOR_SELECT_MIN_COUNT_INDEX = 251
 VECTOR_SELECT_MAX_COUNT_INDEX = 252
@@ -35,9 +40,7 @@ RULE_BASED_PROFILES = {"balanced", "aggressive", "setup", "defensive"}
 def is_rule_based_model_spec(value: Any) -> bool:
     if value is None:
         return False
-    normalized = str(value).strip().lower()
-    base, separator, profile = normalized.partition(":")
-    return base in RULE_BASED_ALIASES and (not separator or profile in RULE_BASED_PROFILES)
+    return parse_rule_based_spec(value) is not None
 
 
 def rule_based_profile_from_spec(value: Any) -> str:
@@ -45,6 +48,9 @@ def rule_based_profile_from_spec(value: Any) -> str:
     normalized = str(value or "rule_based").strip().lower()
     _, separator, profile = normalized.partition(":")
     return profile if separator and profile in RULE_BASED_PROFILES else "balanced"
+
+
+rule_based_spec_from_spec = parse_rule_based_spec
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -90,6 +96,7 @@ class CardMeta:
     is_ace_spec: bool
     name: str
     rules_text: str
+    attacks: tuple[int, ...] = ()
 
     @property
     def stage_rank(self) -> int:
@@ -107,6 +114,7 @@ class AttackMeta:
     cost_size: int
     colorless_cost: int
     energy_requirements: tuple[int, ...]
+    text: str = ""
 
 
 @dataclass(frozen=True)
@@ -128,10 +136,12 @@ class ParsedState:
     discard_ids: np.ndarray
     search_ids: np.ndarray
     context_card_ids: np.ndarray
+    my_deck: int = 60
+    opp_deck: int = 60
 
     @property
     def phase(self) -> str:
-        if self.turn <= 2 or self.my_prizes == 6:
+        if self.turn <= 2:
             return "SETUP"
         if self.my_prizes <= 2 or self.opp_prizes <= 2:
             return "ENDGAME"
@@ -195,6 +205,7 @@ def _card_meta_by_id() -> dict[int, CardMeta]:
             is_ace_spec=bool(getattr(card, "aceSpec", False)),
             name=str(getattr(card, "name", "") or ""),
             rules_text=" ".join(str(getattr(skill, "text", "") or "") for skill in (getattr(card, "skills", None) or [])),
+            attacks=tuple(_int(a) for a in list(getattr(card, "attacks", None) or [])),
         )
     return catalog
 
@@ -213,6 +224,7 @@ def _attack_meta_by_id() -> dict[int, AttackMeta]:
             cost_size=len(energy_requirements),
             colorless_cost=sum(1 for energy in energy_requirements if energy == 0),
             energy_requirements=energy_requirements,
+            text=str(getattr(attack, "text", "") or getattr(attack, "effect", "") or getattr(attack, "description", "") or getattr(attack, "name", "") or ""),
         )
     return catalog
 
@@ -242,6 +254,8 @@ class PokemonObservationAdapter:
             opp_prizes=int(vector[VECTOR_OPP_PRIZE_INDEX]) if vector.size > VECTOR_OPP_PRIZE_INDEX else 6,
             my_hand=int(vector[VECTOR_MY_HAND_INDEX]) if vector.size > VECTOR_MY_HAND_INDEX else 0,
             opp_hand=int(vector[VECTOR_OPP_HAND_INDEX]) if vector.size > VECTOR_OPP_HAND_INDEX else 0,
+            my_deck=int(vector[7]) if vector.size > 7 else 60,
+            opp_deck=int(vector[107]) if vector.size > 107 else 60,
             select_context=int(vector[VECTOR_SELECT_CONTEXT_INDEX]) if vector.size > VECTOR_SELECT_CONTEXT_INDEX else 0,
             min_count=int(vector[VECTOR_SELECT_MIN_COUNT_INDEX]) if vector.size > VECTOR_SELECT_MIN_COUNT_INDEX else 0,
             max_count=int(vector[VECTOR_SELECT_MAX_COUNT_INDEX]) if vector.size > VECTOR_SELECT_MAX_COUNT_INDEX else 0,
@@ -310,6 +324,9 @@ class PokemonObservationAdapter:
         return [int(index) for index in np.flatnonzero(mask)]
 
 
+
+
+
 class RuleBasedPokemonAgent:
     """Transparent heuristic bot for the Pokemon TCG environment."""
 
@@ -321,11 +338,19 @@ class RuleBasedPokemonAgent:
         logger: logging.Logger | None = None,
         debug: bool = False,
         profile: str = "balanced",
+        spec: Any = None,
     ) -> None:
         if temperature < 0:
             raise ValueError("temperature must be non-negative")
         if not 0.0 <= epsilon <= 1.0:
             raise ValueError("epsilon must be between 0 and 1")
+
+        if isinstance(spec, str):
+            spec = parse_rule_based_spec(spec)
+        if spec is None:
+            spec = parse_rule_based_spec(f"rule_based:{profile}") or RuleBotSpec(profile=profile)
+        if profile not in RULE_BASED_PROFILES and getattr(spec, "profile", None) in RULE_BASED_PROFILES:
+            profile = spec.profile
         if profile not in RULE_BASED_PROFILES:
             raise ValueError(f"unknown rule-based profile: {profile}")
 
@@ -334,9 +359,26 @@ class RuleBasedPokemonAgent:
         self.rng = random.Random(seed)
         self.logger = logger or LOGGER
         self.debug = bool(debug)
-        self.profile = profile
+        self.spec = spec
+        self.profile = spec.profile
         self.adapter = PokemonObservationAdapter()
         self.last_decision: dict[str, Any] | None = None
+
+    @property
+    def version(self) -> str:
+        return self.spec.version
+
+    @property
+    def archetype(self) -> str:
+        return self.spec.archetype
+
+    @property
+    def variant(self) -> str:
+        return self.spec.variant
+
+    @property
+    def parameters(self) -> RuleParameters:
+        return self.spec.parameters
 
     def predict(self, obs, state=None, episode_start=None, deterministic: bool = True):
         del state, episode_start, deterministic
@@ -362,6 +404,11 @@ class RuleBasedPokemonAgent:
             "phase": parsed_state.phase,
             "selected": selected.index,
             "selected_reason": selected.reason,
+            "version": self.version,
+            "archetype": self.archetype,
+            "variant": self.variant,
+            "profile": self.profile,
+            "category": self._action_category(self._option_type(options, selected.index)),
             "candidates": [
                 {
                     "index": item.index,
@@ -443,8 +490,15 @@ class RuleBasedPokemonAgent:
         attack_meta = _attack_meta_by_id().get(option.attack_id)
 
         if option.option_type == int(OptionType.ATTACK):
+            damage = self._estimate_attack_damage(option, attack_meta, parsed_state)
+            opp_active = parsed_state.entity_features[6] if parsed_state.entity_features.shape[0] > 6 else None
+            opp_hp = float(opp_active[4] * 400.0) if opp_active is not None and opp_active.size > 4 and opp_active[4] > 0 else 0.0
+            is_ko = (bool(option.features[11] > 0.5) if option.features.size > 11 else False) or (damage > 0.0 and opp_hp > 0.0 and damage >= opp_hp)
+            if damage > 0.0:
+                add("attack_damage", damage * 0.1)
+            if is_ko:
+                add("attack_knockout", 30.0)
             if attack_meta is not None:
-                add("attack_damage", attack_meta.damage * 1.4)
                 add("attack_efficiency", max(0.0, 20.0 - attack_meta.cost_size * 2.5))
                 add("attack_colorless", -attack_meta.colorless_cost * 1.5)
             add("attack_phase", self._phase_attack_bonus(parsed_state.phase))
@@ -480,8 +534,15 @@ class RuleBasedPokemonAgent:
             add("end_turn", -10.0)
             add("end_turn_phase", -6.0 if parsed_state.phase != "ENDGAME" else -1.0)
 
-        elif option.option_type == int(OptionType.SKILL):
-            add("skill_value", 4.0)
+        elif option.option_type in {int(OptionType.ABILITY), int(OptionType.SKILL)}:
+            name = self._normalized_name(card_meta)
+            if "lunatone" in name:
+                has_solrock = any("solrock" in self._normalized_name(self._entity_card_meta(parsed_state, slot)) for slot in range(6))
+                add("skill_value", 12.0 if has_solrock else -20.0)
+            elif "dudunsparce" in name:
+                add("skill_value", -50.0 if parsed_state.my_deck <= 3 else 15.0)
+            else:
+                add("skill_value", 4.0 if parsed_state.my_deck > 2 else -20.0)
 
         elif option.option_type == int(OptionType.SPECIAL_CONDITION):
             add("special_condition_value", 2.0)
@@ -504,6 +565,30 @@ class RuleBasedPokemonAgent:
             add("neutral_fallback", -0.5)
 
         return ActionScore(index=option.index, score=score, reason=reason)
+
+    def _estimate_attack_damage(self, option: OptionRecord, attack_meta: AttackMeta | None, parsed_state: ParsedState) -> float:
+        if option.features.size > 9 and option.features[9] > 0:
+            return float(option.features[9] * 400.0)
+        if attack_meta is None:
+            return 0.0
+        if attack_meta.damage > 0:
+            return attack_meta.damage
+        text = attack_meta.text.lower()
+        if "for each card in your hand" in text:
+            return float(parsed_state.my_hand) * 20.0
+        if "copy" in text or "benched" in text or "choose" in text or "use it" in text or attack_meta.damage == 0:
+            best_benched = 0.0
+            for slot in range(1, 6):
+                card_id = int(parsed_state.entity_ids[slot]) if parsed_state.entity_ids.size > slot else 0
+                benched_pokemon = _card_meta_by_id().get(card_id)
+                if benched_pokemon:
+                    for atk_id in getattr(benched_pokemon, "attacks", []):
+                        b_atk = _attack_meta_by_id().get(int(atk_id))
+                        if b_atk and b_atk.damage > best_benched:
+                            best_benched = b_atk.damage
+            if best_benched > 0:
+                return best_benched
+        return 0.0
 
     def _profile_multiplier(self, reason: str) -> float:
         """Apply broad priorities while keeping one auditable scoring engine."""
@@ -580,13 +665,17 @@ class RuleBasedPokemonAgent:
 
         missing_hp = float(target[6])
         energy_count = float(target[20]) * 8.0 if target.size > 20 else 0.0
-        attack_deficit = min(
-            float(target[25]) * 5.0 if target.size > 25 else 5.0,
-            float(target[26]) * 5.0 if target.size > 26 else 5.0,
-        )
+        deficits = []
+        if target.size > 25 and float(target[25]) > 0:
+            deficits.append(float(target[25]) * 5.0)
+        if target.size > 26 and float(target[26]) > 0:
+            deficits.append(float(target[26]) * 5.0)
+        attack_deficit = min(deficits) if deficits else 5.0
         ready_bonus = (float(target[27]) if target.size > 27 else 0.0) + (float(target[28]) if target.size > 28 else 0.0)
 
         score = 15.0
+        if abs(attack_deficit - 1.0) < 0.1:
+            score += 15.0
         score += max(0.0, 4.0 - attack_deficit) * 4.0
         score += max(0.0, 6.0 - energy_count) * 1.5
         score += max(0.0, 1.0 - missing_hp) * 2.0
@@ -654,6 +743,12 @@ class RuleBasedPokemonAgent:
         own_discard = set(int(value) for value in state.discard_ids[0] if int(value) > 0) if state.discard_ids.size else set()
         bench_count = sum(1 for row in state.entity_features[1:6] if row.size and row[0] > 0)
 
+        if "buddy-buddy poffin" in name or "poffin" in name or "nest ball" in name:
+            return 35.0 if bench_count == 0 else 18.0
+        if "judge" in name or "iono" in name:
+            if state.my_hand > 0 and (state.discard_ids.size == 0 or state.discard_ids.shape[0] == 0 or True): # handle low deck
+                pass
+            return 50.0 if state.my_hand > 0 and (state.turn >= 10 and state.my_hand >= 8) else float((state.opp_hand - state.my_hand) * 4 + (8 if state.my_hand <= 2 else -4))
         if "boss's orders" in name:
             return 24.0 if self._opponent_has_bench(state) else -30.0
         if "prime catcher" in name:
@@ -671,8 +766,6 @@ class RuleBasedPokemonAgent:
             return 18.0 if own_discard else -20.0
         if "glass trumpet" in name:
             return 22.0 if own_discard and bench_count else -15.0
-        if "judge" in name:
-            return float((state.opp_hand - state.my_hand) * 4 + (8 if state.my_hand <= 2 else -4))
         if "lillie's determination" in name or "lillie’s determination" in name:
             target = 8 if state.my_prizes == 6 else 6
             return float((target - state.my_hand) * 5)
@@ -834,6 +927,15 @@ class RuleBasedPokemonAgent:
         if slot < 0 or slot >= parsed_state.entity_features.shape[0]:
             return None
         return parsed_state.entity_features[slot]
+    @staticmethod
+    def _action_category(option_type: int) -> str:
+        if option_type == int(OptionType.ATTACK):
+            return "attack"
+        if option_type in {int(OptionType.ATTACH), int(OptionType.EVOLVE), int(OptionType.PLAY)}:
+            return "setup"
+        if option_type == int(OptionType.RETREAT):
+            return "defense"
+        return "resource"
 
     @staticmethod
     def _option_type(options: list[OptionRecord], index: int) -> int:

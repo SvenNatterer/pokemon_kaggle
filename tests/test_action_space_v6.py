@@ -5,7 +5,7 @@ from unittest.mock import patch
 import numpy as np
 
 from src.agents.rule_based_agent import RuleBasedPokemonAgent
-from src.env_wrapper import (
+from src.env.env_wrapper import (
     LEGACY_ACTION_SPACE_SIZE,
     LEGACY_STOP_ACTION,
     V6_ACTION_SPACE_SIZE,
@@ -13,7 +13,7 @@ from src.env_wrapper import (
     PokemonTCGEnv,
     advance_selection,
 )
-from src.train import validate_policy_action_space
+from src.training.train import validate_policy_action_space
 
 
 def _selection(min_count=1, max_count=2, option_count=2):
@@ -36,7 +36,7 @@ class ActionSpaceV6Tests(unittest.TestCase):
         self.assertEqual("v6", env.policy_version)
 
     def test_legacy_environment_remains_1000_actions_by_default(self):
-        env = PokemonTCGEnv([6] * 60, [5] * 60)
+        env = PokemonTCGEnv([6] * 60, [5] * 60, action_space_size=LEGACY_ACTION_SPACE_SIZE)
 
         self.assertEqual(LEGACY_ACTION_SPACE_SIZE, env.action_space.n)
         self.assertEqual(LEGACY_STOP_ACTION, env.stop_action)
@@ -68,7 +68,7 @@ class ActionSpaceV6Tests(unittest.TestCase):
                 env.pending_selection = [0, 2]
                 env.opponent_pending_selection = [1]
 
-                with patch("src.env_wrapper.to_observation_class", return_value=selection):
+                with patch("src.env.env_wrapper.to_observation_class", return_value=selection):
                     learner_obs = env._get_obs_python(
                         perspective=learner_perspective,
                         force_structured=False,

@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.chdir(ROOT)
 
-from src.arena_core import (
+from src.arena.arena_core import (
     discover_participants,
     enabled_participants,
     read_json,
@@ -92,7 +92,7 @@ def evaluate_pair(
     """Execute evaluation for a single candidate/opponent pair via evaluate_single.py."""
     command = [
         worker_python,
-        "src/evaluate_single.py",
+        "src/arena/evaluate_single.py",
         candidate["model_path"],
         candidate["deck_path"],
         opponent["model_path"],

@@ -17,8 +17,8 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.custom_policy import PokemonTCGFeatureExtractor
-from src.env_wrapper import V6_ACTION_SPACE_SIZE, PokemonTCGEnv
+from src.models.custom_policy import PokemonTCGFeatureExtractor
+from src.env.env_wrapper import V6_ACTION_SPACE_SIZE, PokemonTCGEnv
 
 
 def observation_batch(observation_space, batch_size: int) -> dict[str, torch.Tensor]:

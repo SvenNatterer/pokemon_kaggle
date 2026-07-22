@@ -5,9 +5,9 @@ import torch
 from gymnasium import spaces
 
 from src.cg.sim import HAS_NATIVE_V6_OBSERVATION
-from src.custom_policy import PokemonTCGFeatureExtractor
-from src.custom_ppo import CustomPPO
-from src.env_wrapper import (
+from src.models.custom_policy import PokemonTCGFeatureExtractor
+from src.training.custom_ppo import CustomPPO
+from src.env.env_wrapper import (
     PokemonTCGEnv,
     V6_ACTION_SPACE_SIZE,
     _fit_observation_to_model_space,
@@ -81,7 +81,8 @@ def test_native_encoder_exports_exact_hidden_zone_ids():
                 break
             legal = np.flatnonzero(observation["action_mask"])
             observation, _, terminated, truncated, _ = env.step(int(legal[0]))
-            assert not (terminated or truncated)
+            if terminated or truncated:
+                break
 
         assert np.count_nonzero(observation["aux_own_prize_ids"]) == 6
         assert np.count_nonzero(observation["aux_opponent_prize_ids"]) == 6

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from src.lookahead_teacher import (
+from src.training.lookahead_teacher import (
     LookaheadConfig,
     LookaheadTeacher,
     build_search_hypotheses,

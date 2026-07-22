@@ -111,7 +111,7 @@ def validate_static_inputs(config: dict[str, Any]) -> None:
     required = [
         repo_path(config["development_pool"]),
         repo_path(config["base_evaluation"]["manifest"]),
-        ROOT / "src" / "train.py",
+        ROOT / "src" / "training" / "train.py",
         ROOT / "scripts" / "evaluate_submission.py",
     ]
     required.extend(repo_path(base["deck_path"]) for base in all_base_definitions(config))

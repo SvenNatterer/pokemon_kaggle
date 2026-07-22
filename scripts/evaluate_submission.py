@@ -21,10 +21,10 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 os.chdir(ROOT)
 sys.path.insert(0, ROOT)
 
-from src.model_paths import discover_deck_models, parse_deck_model_path
-from src.arena_core import atomic_write_json, read_json, utc_now
+from src.league.model_paths import discover_deck_models, parse_deck_model_path
+from src.arena.arena_core import atomic_write_json, read_json, utc_now
 from src.agents.rule_based_agent import is_rule_based_model_spec
-from src.training_health import (
+from src.training.training_health import (
     health_gate,
     merge_option_count_histograms,
     summarize_health,
@@ -344,7 +344,7 @@ def evaluate_pair(
 ) -> dict[str, Any]:
     command = [
         worker_python,
-        "src/evaluate_single.py",
+        "src/arena/evaluate_single.py",
         candidate["model_path"],
         candidate["deck_path"],
         opponent["model_path"],
