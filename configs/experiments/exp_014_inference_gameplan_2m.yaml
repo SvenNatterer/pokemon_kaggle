@@ -1,0 +1,49 @@
+# EXP-014 Stage 2: Continued Training (+1M steps to 2M total steps)
+deck: decks/deck_bank/bank_38.csv
+model_name: models/ppo_v6_exp014_2m_inference_gameplan.zip
+base_model: models/ppo_v6_exp014_1m_inference_gameplan.zip
+opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
+algorithm: PPO
+total_timesteps: 1000000
+learning_rate: 0.00025
+n_steps: 512
+batch_size: 2048
+n_epochs: 2
+gamma: 0.999
+gae_lambda: 0.95
+clip_range: 0.12
+ent_coef: 0.008
+aux_coef: 0.1
+distill_coef: 0.1
+teacher_sample_rate: 0.01
+num_envs: 4
+torch_threads: 0
+inference_guardrails: true
+
+features_dim: 512
+hidden_dim: 256
+net_arch: [512, 512]
+activation: LayerNorm_ReLU
+
+attention:
+  enabled: true
+  embedding_dim: 64
+  n_heads: 4
+
+features:
+  disable_cpp_relations: true
+  prize_mapping: true
+  archetype_prediction: true
+  wandb_logging: true
+
+lookahead:
+  max_depth: 1
+  beam_width: 2
+  node_budget: 8
+  max_combinations: 16
+
+rewards:
+  STEP_PENALTY: -0.001
+  DECK_OUT_PENALTY: -0.50
+  DECK_SHRINK: -0.005
+  DECK_LOW_COUNT_MULT: 4.0

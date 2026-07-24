@@ -84,6 +84,11 @@ def main() -> int:
         default=5,
         help="Number of games to generate if no pool or opponent model is specified.",
     )
+    parser.add_argument(
+        "--lookahead",
+        action="store_true",
+        help="Enable inference-time lookahead tree search refinement.",
+    )
 
     args = parser.parse_args()
 
@@ -127,7 +132,8 @@ def main() -> int:
         if not out_dir.is_absolute():
             out_dir = ROOT / out_dir
     else:
-        out_dir = ROOT / "replays" / model_path.stem
+        suffix = "_lookahead" if args.lookahead else ""
+        out_dir = ROOT / "replays" / f"{model_path.stem}{suffix}"
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -141,6 +147,7 @@ def main() -> int:
             deck_b_path=args.deck_b if args.deck_b else None,
             out_dir=str(out_dir),
             num_games=args.num_games,
+            enable_lookahead=args.lookahead,
         )
         print(f"\nSuccessfully generated {len(results)} replay(s) in {out_dir}")
         return 0

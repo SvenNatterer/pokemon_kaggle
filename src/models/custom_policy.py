@@ -431,6 +431,8 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             nn.Linear(128, 64),
             nn.ReLU(),
         )
+        self.entity_attn = nn.MultiheadAttention(embed_dim=64, num_heads=4, batch_first=True)
+        self.latest_attn_entropy = 0.0
         option_input_dim = (
             card_repr_dim + ATTACK_EMBED_DIM + ATTACK_METADATA_DIM + 8 + 6 + OPTION_FEATURE_DIM
         )
@@ -455,10 +457,11 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             + 3 * card_repr_dim
             + 2 * OPTION_EMBED_DIM
         )
+        hidden_proj_dim = max(512, features_dim * 2)
         self.net = nn.Sequential(
-            nn.Linear(combined_dim, 512),
+            nn.Linear(combined_dim, hidden_proj_dim),
             nn.ReLU(),
-            nn.Linear(512, features_dim),
+            nn.Linear(hidden_proj_dim, features_dim),
             nn.ReLU(),
         )
 
@@ -583,7 +586,7 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         energy_card_repr = self._mean_card_set(
             observations["entity_energy_card_ids"], card_table
         )
-        entities = self.entity_encoder(
+        entity_embeds = self.entity_encoder(
             torch.cat(
                 [
                     entity_card_repr,
@@ -594,7 +597,12 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
                 ],
                 dim=-1,
             )
-        ).flatten(start_dim=-2)
+        )
+        attn_out, attn_weights = self.entity_attn(entity_embeds, entity_embeds, entity_embeds, need_weights=True)
+        eps = 1e-8
+        attn_entropy_tensor = -torch.sum(attn_weights * torch.log(attn_weights + eps), dim=-1)
+        self.latest_attn_entropy = float(attn_entropy_tensor.mean().detach().cpu().item())
+        entities = (entity_embeds + attn_out).flatten(start_dim=-2)
 
         hand = self._pool_card_set(observations["hand_ids"], card_table)
         discard_ids = observations["discard_ids"]

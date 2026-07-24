@@ -1,0 +1,17 @@
+# EXP-006: Overfitting & Generalization Detection Concept
+algorithm: PPO
+learning_rate: 0.0001
+n_steps: 512
+batch_size: 1024
+n_epochs: 2
+gamma: 0.999
+gae_lambda: 0.95
+clip_range: 0.12
+ent_coef: 0.008
+opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
+
+overfit_detector:
+  enabled: true
+  eval_freq_steps: 50000
+  max_winrate_gap: 0.25
+  min_action_entropy: 0.15

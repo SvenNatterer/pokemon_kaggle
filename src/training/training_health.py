@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable
+import numpy as np
+from collections import Counter
+from typing import Any, Iterable, List, Dict
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
 
 
 HEALTH_SCHEMA_VERSION = 1
@@ -195,3 +202,105 @@ class TrainingHealthCallback(BaseCallback):
             option_count_histogram=self.option_count_histogram,
             opponent_episodes=self.opponent_episodes,
         )
+
+
+class FeatureMetricsCallback(BaseCallback):
+    """
+    Callback that logs Prize Mapping & Opponent Archetype Prediction performance metrics to WandB.
+    
+    Metrics logged to WandB:
+    - features/prize_certainty_ratio: % of episode steps where prize cards are 100% thinned/known.
+    - features/prize_entropy: Mean information entropy of prize card estimation.
+    - features/archetype_confidence: Mean top-1 probability of opponent archetype prediction.
+    - features/archetype_accuracy: Prediction accuracy against known opponent decks.
+    - train/archetype_accuracy: Archetype accuracy logged under train namespace.
+    """
+
+    def __init__(self, verbose: int = 0):
+        super().__init__(verbose)
+        self.prize_certainty_history: List[float] = []
+        self.prize_entropy_history: List[float] = []
+        self.archetype_conf_history: List[float] = []
+        self.archetype_acc_history: List[float] = []
+
+    def _on_step(self) -> bool:
+        # Collect step info from env infos buffer if available
+        if hasattr(self.training_env, "env_method"):
+            try:
+                for info in self.training_env.env_method("get_feature_metrics"):
+                    if isinstance(info, dict):
+                        if "prize_certainty" in info:
+                            self.prize_certainty_history.append(float(info["prize_certainty"]))
+                        if "prize_entropy" in info:
+                            self.prize_entropy_history.append(float(info["prize_entropy"]))
+                        if "archetype_conf" in info:
+                            self.archetype_conf_history.append(float(info["archetype_conf"]))
+                        if "archetype_acc" in info:
+                            self.archetype_acc_history.append(float(info["archetype_acc"]))
+            except Exception:
+                pass
+        return True
+
+    def _on_rollout_end(self) -> None:
+        if self.prize_certainty_history:
+            self.logger.record("features/prize_certainty_ratio", np.mean(self.prize_certainty_history))
+            self.prize_certainty_history.clear()
+
+        if self.prize_entropy_history:
+            self.logger.record("features/prize_entropy", np.mean(self.prize_entropy_history))
+            self.prize_entropy_history.clear()
+
+        if self.archetype_conf_history:
+            self.logger.record("features/archetype_confidence", np.mean(self.archetype_conf_history))
+            self.archetype_conf_history.clear()
+
+        if self.archetype_acc_history:
+            mean_acc = np.mean(self.archetype_acc_history)
+            self.logger.record("features/archetype_accuracy", mean_acc)
+            self.logger.record("train/archetype_accuracy", mean_acc)
+            self.archetype_acc_history.clear()
+
+
+class GuardrailMetricsCallback(BaseCallback):
+    """
+    Callback that logs total guardrail intervention count and per-rule breakdown to WandB.
+    
+    Metrics logged to WandB:
+    - guardrails/total_interventions: Total cumulative count of guardrail interventions across environments.
+    - guardrails/rule/<rule_name>: Cumulative interventions by specific guardrail rule.
+    - guardrails/interventions_barplot: WandB Bar plot visualizing intervention sources.
+    """
+
+    def __init__(self, verbose: int = 0):
+        super().__init__(verbose)
+
+    def _on_step(self) -> bool:
+        return True
+
+    def _on_rollout_end(self) -> None:
+        if hasattr(self.training_env, "env_method"):
+            try:
+                results = self.training_env.env_method("get_guardrail_metrics")
+                total_interventions = 0.0
+                rule_counts: Counter[str] = Counter()
+
+                for res in results:
+                    if isinstance(res, dict):
+                        total_interventions += float(res.get("total_interventions", 0.0))
+                        by_rule = res.get("by_rule", {})
+                        if isinstance(by_rule, dict):
+                            for rname, cnt in by_rule.items():
+                                rule_counts[rname] += int(cnt)
+
+                self.logger.record("guardrails/total_interventions", total_interventions)
+                for rname, cnt in rule_counts.items():
+                    self.logger.record(f"guardrails/rule/{rname}", float(cnt))
+
+                if wandb is not None and wandb.run is not None and len(rule_counts) > 0:
+                    data = [[rule, count] for rule, count in rule_counts.items()]
+                    table = wandb.Table(data=data, columns=["Rule", "Interventions"])
+                    barplot = wandb.plot.bar(table, "Rule", "Interventions", title="Guardrail Interventions by Rule")
+                    wandb.log({"guardrails/interventions_barplot": barplot})
+            except Exception:
+                pass
+

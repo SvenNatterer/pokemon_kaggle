@@ -14,16 +14,19 @@ if ROOT not in sys.path:
 from src.league.evaluation import evaluate_vs_baseline, evaluate_vs_opponent
 
 if __name__ == "__main__":
-    if len(sys.argv) == 6:
+    if len(sys.argv) >= 6:
         model_a = sys.argv[1]
         deck_a = sys.argv[2]
         model_b = sys.argv[3]
         deck_b = sys.argv[4]
         num_games = int(sys.argv[5])
+        enable_lookahead = False
+        if len(sys.argv) >= 7 and sys.argv[6].lower() in ("1", "true", "--lookahead", "lookahead"):
+            enable_lookahead = True
 
         try:
             result, details = evaluate_vs_opponent(
-                model_a, deck_a, model_b, deck_b, num_games, return_details=True
+                model_a, deck_a, model_b, deck_b, num_games, return_details=True, enable_lookahead=enable_lookahead
             )
             wins, losses, draws, pw1, dw1, bw1, pw2, dw2, bw2 = result
             print(f"RESULT:{wins},{losses},{draws},{pw1},{dw1},{bw1},{pw2},{dw2},{bw2}")

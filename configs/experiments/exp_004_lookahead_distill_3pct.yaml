@@ -1,0 +1,21 @@
+# EXP-004: Lookahead Teacher Policy Distillation (3% Teacher Sample Rate, aux_coef=0.1)
+algorithm: PPO
+learning_rate: 0.0001
+n_steps: 512
+batch_size: 1024
+n_epochs: 2
+gamma: 0.999
+gae_lambda: 0.95
+clip_range: 0.12
+ent_coef: 0.008
+opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
+
+# Lookahead Teacher Distillation Parameters
+distill_coef: 0.1
+aux_coef: 0.1
+teacher_sample_rate: 0.03
+lookahead:
+  max_depth: 3
+  beam_width: 2
+  node_budget: 16
+  max_combinations: 16

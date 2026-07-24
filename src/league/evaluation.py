@@ -75,7 +75,7 @@ def evaluate_vs_baseline(model_path, deck_path, num_games=10):
     return wins
 
 
-def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_games=10, return_details=False):
+def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_games=10, return_details=False, enable_lookahead=False):
     deck1 = read_deck(deck1_path)
     deck2 = read_deck(deck2_path)
     
@@ -112,6 +112,15 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
         nonlocal total_turns
 
         learner_model = load_bot(learner_model_path)
+        if enable_lookahead and learner_model is not None:
+            try:
+                from src.models.lookahead_inference import LookaheadInferenceAgent
+                learner_model = LookaheadInferenceAgent(
+                    learner_model, my_deck=learner_deck, opponent_deck=opponent_deck
+                )
+            except Exception as e:
+                print(f"[WARNING] Failed to wrap model with LookaheadInferenceAgent: {e}")
+
         env = build_evaluation_env(
             learner_deck,
             opponent_deck,
@@ -133,12 +142,17 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
                         _fit_observation_to_model_space(obs, model_space)
                         if model_space is not None else obs
                     )
-                    action, lstm_state = learner_model.predict(
-                        obs_for_model,
-                        state=lstm_state,
-                        episode_start=episode_start,
-                        deterministic=True,
-                    )
+                    predict_kwargs = {
+                        "state": lstm_state,
+                        "episode_start": episode_start,
+                        "deterministic": True,
+                    }
+                    if enable_lookahead and hasattr(env, "obs"):
+                        from src.cg.api import to_observation_class
+                        predict_kwargs["raw_observation"] = to_observation_class(env.obs)
+                        predict_kwargs["perspective"] = env.learner_perspective
+
+                    action, lstm_state = learner_model.predict(obs_for_model, **predict_kwargs)
                     episode_start = np.zeros((1,), dtype=bool)
                     obs, _, terminated, truncated, info = env.step(action)
                     turns += 1

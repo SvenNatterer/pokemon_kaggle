@@ -1,3 +1,4 @@
+from typing import Any, Dict
 import gymnasium as gym
 from gymnasium import spaces
 import ctypes
@@ -39,7 +40,6 @@ SEARCH_CARD_SLOTS = 60
 LOOKING_CARD_SLOTS = 60
 MAX_HIDDEN_CARD_COUNT = 60
 
-
 def encode_hidden_card_count(count):
     """Map an absolute hidden-card count to [0, 1] without losing duplicates."""
     clipped = min(MAX_HIDDEN_CARD_COUNT, max(0, int(count)))
@@ -75,10 +75,6 @@ DEFAULT_REWARD_CONFIG = {
     "DECK_LOW_COUNT_MULT": 0.0,
     "DAMAGE_TAKEN": -0.00005,
     "DAMAGE_DEALT": 0.00005,
-    "ENERGY_ATTACHED": 0.0,
-    "ENERGY_ACTIVE_MULT": 0.0,
-    "ENERGY_USELESS_MULT": 0.0,
-    "TIME_PENALTY": 0.0,
 }
 
 def _pokemon_key(pokemon):
@@ -228,8 +224,32 @@ class PokemonTCGEnv(gym.Env):
         zone_aux_targets=False,
         enable_lookahead_teacher=False,
         teacher_sample_rate=0.50,
+        inference_guardrails=False,
+        search_guardrail_rate=0.0,
     ):
         super().__init__()
+        self.my_deck = my_deck
+        self.opponent_deck = opponent_deck
+        self.enable_inference_guardrails = inference_guardrails
+        self.search_guardrail_rate = float(search_guardrail_rate)
+        self.inference_guardrail = None
+        self.search_guardrail = None
+        if self.enable_inference_guardrails:
+            try:
+                from src.models.inference_guardrails import InferenceGuardrails
+                self.inference_guardrail = InferenceGuardrails(my_deck=self.my_deck)
+            except Exception as e:
+                print(f"[WARNING] InferenceGuardrails initialization failed: {e}")
+                self.inference_guardrail = None
+        if self.search_guardrail_rate > 0.0:
+            try:
+                from src.models.inference_guardrails import SampledSearchGuardrails
+                self.search_guardrail = SampledSearchGuardrails(sample_rate=self.search_guardrail_rate)
+            except Exception as e:
+                print(f"[WARNING] SampledSearchGuardrails initialization failed: {e}")
+                self.search_guardrail = None
+        self.guardrail_interventions_count = 0
+        self.guardrail_interventions_by_rule: dict[str, int] = {}
         self.zone_aux_targets = zone_aux_targets
         self.structured_v2 = structured_v2
         self.enable_lookahead_teacher = enable_lookahead_teacher
@@ -251,7 +271,6 @@ class PokemonTCGEnv(gym.Env):
         self.max_options = int(action_space_size)
         self.stop_action = self.max_options - 1
         self.policy_version = "v6" if self.max_options == V6_ACTION_SPACE_SIZE else "v5"
-        self.my_deck = my_deck
         self.opponent_deck = opponent_deck
         self.opponent_model_path = opponent_model_path
         self.opponent_model = None
@@ -282,11 +301,7 @@ class PokemonTCGEnv(gym.Env):
             self.reward_config["PRIZE_LOST"] = 0.0
             self.reward_config["DAMAGE_DEALT"] = 0.0
             self.reward_config["DAMAGE_TAKEN"] = 0.0
-            self.reward_config["ENERGY_ATTACHED"] = 0.0
-            self.reward_config["ENERGY_ACTIVE_MULT"] = 0.0
-            self.reward_config["ENERGY_USELESS_MULT"] = 0.0
             self.reward_config["DECK_SHRINK"] = 0.0
-            self.reward_config["TIME_PENALTY"] = 0.0
         
         # Determine valid energy types from my_deck (Card ID 1..8 maps 1-to-1 to EnergyType 1..8)
         self.valid_energy_types = {0} # Colorless (0) is always valid
@@ -408,8 +423,7 @@ class PokemonTCGEnv(gym.Env):
             "step_penalty", "invalid_action", "attack_bonus", "end_turn",
             "prize_win", "bench_out_win", "deck_out_win", "loss", "deck_out_penalty",
             "prize_taken", "prize_lost", "deck_shrink", "damage_taken", "damage_dealt",
-            "energy_active_useful", "energy_active_useless",
-            "switch_penalty", "time_penalty"
+            "switch_penalty", "gameplan_violation_penalty", "gameplan_bonus"
         ]
         self.current_obs_dict = None
         self.reward_stats = {k: 0.0 for k in self.reward_keys}
@@ -420,6 +434,27 @@ class PokemonTCGEnv(gym.Env):
     def _add_reward(self, name, value):
         self.reward_stats[name] += value
         return value
+
+    def _evaluate_gameplan_reward(self, old_obs, chosen_option) -> float:
+        """High-level Game Plan Evaluator hook for reward shaping.
+        
+        Applies soft rewards/penalties when actions adhere to or violate high-level
+        macro strategies (e.g. TR Mewtwo bench setup requirements).
+        """
+        if not old_obs or not chosen_option:
+            return 0.0
+            
+        reward = 0.0
+        
+        if getattr(self, "inference_guardrail", None) and hasattr(self.inference_guardrail, "evaluate_gameplan"):
+            reward += self.inference_guardrail.evaluate_gameplan(self, old_obs, chosen_option)
+            
+        if reward > 0:
+            self._add_reward("gameplan_bonus", reward)
+        elif reward < 0:
+            self._add_reward("gameplan_violation_penalty", reward)
+            
+        return reward
 
     def _deck_shrink_reward(self, old_count, new_count):
         cards_drawn = max(0, int(old_count) - int(new_count))
@@ -491,6 +526,7 @@ class PokemonTCGEnv(gym.Env):
         else:
             p0_deck, p1_deck = self.opponent_deck, self.my_deck
 
+        self.reset_inference_guardrails()
         self.current_obs_dict, _ = battle_start(p0_deck, p1_deck)
         self.opponent_lstm_state = None
         self.opponent_episode_start = True
@@ -499,6 +535,89 @@ class PokemonTCGEnv(gym.Env):
         self._process_opponent_turns()
         
         return self._get_obs(perspective=self.learner_perspective), self._get_info()
+
+    def reset_inference_guardrails(self) -> None:
+        if self.inference_guardrail is not None:
+            self.inference_guardrail.reset()
+        if self.search_guardrail is not None:
+            self.search_guardrail.reset()
+
+    def get_guardrail_metrics(self) -> dict[str, Any]:
+        return {
+            "total_interventions": float(self.guardrail_interventions_count),
+            "by_rule": dict(getattr(self, "guardrail_interventions_by_rule", {})),
+        }
+
+    def _update_feature_metrics(self, obs, perspective=0):
+        if obs is None or not getattr(obs, "current", None):
+            return
+        try:
+            opp_index = 1 - perspective
+            opp_player = obs.current.players[opp_index]
+            revealed_cards = []
+            for p in getattr(opp_player, "active", []) or []:
+                cid = _bounded_id(getattr(p, "id", None), MAX_CARD_ID)
+                if cid:
+                    revealed_cards.append(str(cid))
+                    if cid in self.card_data_by_id:
+                        revealed_cards.append(getattr(self.card_data_by_id[cid], "name", str(cid)))
+            for p in getattr(opp_player, "bench", []) or []:
+                cid = _bounded_id(getattr(p, "id", None), MAX_CARD_ID)
+                if cid:
+                    revealed_cards.append(str(cid))
+                    if cid in self.card_data_by_id:
+                        revealed_cards.append(getattr(self.card_data_by_id[cid], "name", str(cid)))
+            for c in getattr(opp_player, "discard", []) or []:
+                cid = _bounded_id(getattr(c, "id", None), MAX_CARD_ID)
+                if cid:
+                    revealed_cards.append(str(cid))
+                    if cid in self.card_data_by_id:
+                        revealed_cards.append(getattr(self.card_data_by_id[cid], "name", str(cid)))
+
+            if not hasattr(self, "_archetype_predictor"):
+                from src.models.deck_archetypes import ArchetypePredictor
+                self._archetype_predictor = ArchetypePredictor()
+
+            probs = self._archetype_predictor.predict(revealed_cards)
+            top_idx = int(np.argmax(probs))
+            self._last_archetype_conf = float(probs[top_idx])
+
+            pred_archetype = self._archetype_predictor.DEFAULT_ARCHETYPES[top_idx]
+
+            opp_deck_cards = []
+            for c in (self.opponent_deck or []):
+                cid = None
+                if isinstance(c, (int, float, str)) and str(c).isdigit():
+                    cid = int(c)
+                elif hasattr(c, "id"):
+                    cid = getattr(c, "id")
+                elif isinstance(c, dict) and "id" in c:
+                    cid = c["id"]
+                cid = _bounded_id(cid, MAX_CARD_ID)
+                if cid and cid in self.card_data_by_id:
+                    cname = getattr(self.card_data_by_id[cid], "name", "").lower()
+                    if cname:
+                        opp_deck_cards.append(cname)
+
+            pred_clean = pred_archetype.lower().replace("_", " ").replace(" ex", "").replace(" v8", "").strip()
+            self._last_archetype_acc = 1.0 if any(
+                pred_clean in card_name or card_name in pred_clean
+                for card_name in opp_deck_cards
+            ) else 0.0
+        except Exception:
+            pass
+
+    def get_feature_metrics(self) -> dict[str, float]:
+        metrics = {}
+        if hasattr(self, "_last_prize_certainty"):
+            metrics["prize_certainty"] = float(self._last_prize_certainty)
+        if hasattr(self, "_last_prize_entropy"):
+            metrics["prize_entropy"] = float(self._last_prize_entropy)
+        if hasattr(self, "_last_archetype_conf"):
+            metrics["archetype_conf"] = float(self._last_archetype_conf)
+        if hasattr(self, "_last_archetype_acc"):
+            metrics["archetype_acc"] = float(self._last_archetype_acc)
+        return metrics
 
     @staticmethod
     def _is_native_engine_error(error):
@@ -595,6 +714,7 @@ class PokemonTCGEnv(gym.Env):
                 step_reward += self._add_reward("attack_bonus", self._reward("ATTACK_BONUS"))
             elif chosen_option.type == getattr(OptionType, 'END', 14):
                 step_reward += self._add_reward("end_turn", self._reward("END_TURN"))
+            step_reward += self._evaluate_gameplan_reward(old_obs, chosen_option)
                 
         self.current_obs_dict = battle_select(self.pending_selection)
         self.pending_selection = []
@@ -668,62 +788,6 @@ class PokemonTCGEnv(gym.Env):
         delta_opp_hp = sum_hp(old_opponent) - sum_hp(new_opponent)
         if delta_opp_hp > 0:
             reward += self._add_reward("damage_dealt", delta_opp_hp * self._reward("DAMAGE_DEALT"))
-            
-        # Energy Attached
-        def sum_energies(p):
-            e = 0
-            if p.active and p.active[0]: e += len(p.active[0].energies)
-            for b in p.bench:
-                if b: e += len(b.energies)
-            return e
-            
-        delta_total_energy = sum_energies(new_me) - sum_energies(old_me)
-        if delta_total_energy > 0:
-            active_attached = False
-            useful_energy_attached = False
-            if old_me.active and old_me.active[0] and new_me.active and new_me.active[0]:
-                if _same_pokemon(old_me.active[0], new_me.active[0]):
-                    old_e_count = len(old_me.active[0].energies)
-                    new_e_count = len(new_me.active[0].energies)
-                    if new_e_count > old_e_count:
-                        active_attached = True
-                        old_e_list = [int(e) if not hasattr(e, 'value') else e.value for e in old_me.active[0].energies]
-                        new_e_list = [int(e) if not hasattr(e, 'value') else e.value for e in new_me.active[0].energies]
-                        
-                        active_pokemon_id = new_me.active[0].id
-                        costs = self.pokemon_attack_costs.get(active_pokemon_id, [])
-                        
-                        def calc_deficit(attached, cost):
-                            attached_counts = {}
-                            for e in attached:
-                                attached_counts[e] = attached_counts.get(e, 0) + 1
-                            cost_specific = [e for e in cost if e != 0]
-                            cost_colorless = sum(1 for e in cost if e == 0)
-                            missing_specific = 0
-                            for req_e in cost_specific:
-                                if attached_counts.get(req_e, 0) > 0:
-                                    attached_counts[req_e] -= 1
-                                else:
-                                    missing_specific += 1
-                            remaining_attached = sum(attached_counts.values())
-                            missing_colorless = max(0, cost_colorless - remaining_attached)
-                            return missing_specific + missing_colorless
-
-                        for cost in costs:
-                            def_before = calc_deficit(old_e_list, cost)
-                            def_after = calc_deficit(new_e_list, cost)
-                            if def_after < def_before:
-                                useful_energy_attached = True
-                                break
-
-            if active_attached and useful_energy_attached:
-                reward += self._add_reward("energy_active_useful", delta_total_energy * self._reward("ENERGY_ATTACHED") * self._reward("ENERGY_ACTIVE_MULT"))
-            elif active_attached and not useful_energy_attached:
-                reward += self._add_reward("energy_active_useless", delta_total_energy * self._reward("ENERGY_ATTACHED") * self._reward("ENERGY_USELESS_MULT"))
-            
-        # Step Penalty (Time penalty)
-        reward += self._add_reward("time_penalty", self._reward("TIME_PENALTY"))
-                
         return reward
 
     def _process_opponent_turns(self):
@@ -1383,6 +1447,7 @@ class PokemonTCGEnv(gym.Env):
                 except Exception:
                     teacher_action = -1
 
+        self._update_feature_metrics(obs, perspective)
         result["teacher_action"] = np.array([teacher_action], dtype=np.int32)
         return result
 
@@ -1419,6 +1484,28 @@ class PokemonTCGEnv(gym.Env):
             max_count = min(num_opts, max(0, int(obs.select.maxCount or 0)))
             if len(pending_selection) >= min_count and (min_count == 0 or max_count > 1):
                 mask[stop_action] = 1
+
+        if self.inference_guardrail is not None or self.search_guardrail is not None:
+            encoded_obs = {"action_mask": mask}
+            if self.inference_guardrail is not None:
+                encoded_obs, interventions = self.inference_guardrail.apply(
+                    obs, encoded_obs, perspective=perspective, pending_selection=pending_selection
+                )
+                if interventions:
+                    self.guardrail_interventions_count += len(interventions)
+                    for inv in interventions:
+                        rname = getattr(inv, "rule", "unknown")
+                        self.guardrail_interventions_by_rule[rname] = self.guardrail_interventions_by_rule.get(rname, 0) + 1
+            if self.search_guardrail is not None:
+                encoded_obs, interventions = self.search_guardrail.apply(
+                    obs, encoded_obs, perspective=perspective, rng=random, pending_selection=pending_selection
+                )
+                if interventions:
+                    self.guardrail_interventions_count += len(interventions)
+                    for inv in interventions:
+                        rname = getattr(inv, "rule", "search_guardrail")
+                        self.guardrail_interventions_by_rule[rname] = self.guardrail_interventions_by_rule.get(rname, 0) + 1
+            mask = encoded_obs["action_mask"]
             
         vec = np.zeros((self.vector_dim,), dtype=np.float32)
         if obs.current is not None:
@@ -1722,9 +1809,7 @@ class PokemonTCGEnv(gym.Env):
         return info
 
     def close(self):
-        if self.current_obs_dict is not None:
-            battle_finish()
-            self.current_obs_dict = None
+        self.current_obs_dict = None
 
 def read_sample_deck():
     path = os.path.join(os.path.dirname(__file__), "..", "pokemon-tcg-ai-battle", "sample_submission", "sample_submission", "deck.csv")

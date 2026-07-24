@@ -372,6 +372,7 @@ def evaluate_pair(
     games: int,
     timeout: int,
     worker_python: str,
+    lookahead: bool = False,
 ) -> dict[str, Any]:
     command = [
         worker_python,
@@ -382,6 +383,8 @@ def evaluate_pair(
         opponent["deck_path"],
         str(games),
     ]
+    if lookahead:
+        command.append("1")
     child_environment = os.environ.copy()
     for variable in (
         "OMP_NUM_THREADS",
@@ -441,6 +444,7 @@ def evaluate_pairs(
     workers: int,
     cache_dir: str | None = None,
     force: bool = False,
+    lookahead: bool = False,
 ):
     """Yield cached or newly completed independent matchups."""
     pairs = []
@@ -459,7 +463,7 @@ def evaluate_pairs(
     if active_workers == 1:
         for candidate, opponent in pairs:
             row = evaluate_pair(
-                candidate, opponent, games, timeout, worker_python
+                candidate, opponent, games, timeout, worker_python, lookahead=lookahead
             )
             row["cached"] = False
             if cache_dir:
@@ -476,6 +480,7 @@ def evaluate_pairs(
                 games,
                 timeout,
                 worker_python,
+                lookahead,
             ): (candidate, opponent)
             for candidate, opponent in pairs
         }
@@ -673,6 +678,11 @@ def main() -> int:
         help="Replay every matchup and replace its cached result.",
     )
     parser.add_argument(
+        "--lookahead",
+        action="store_true",
+        help="Enable inference-time lookahead tree search for candidate decisions.",
+    )
+    parser.add_argument(
         "--best-candidate-file", default="",
         help="Optional JSON destination for the top candidate selected by Wilson lower bound.",
     )
@@ -702,6 +712,7 @@ def main() -> int:
     print(f"Holdout file: {args.holdout_file}")
     print(f"Worker python: {worker_python}")
     print(f"Games per pair: {args.games}")
+    print(f"Lookahead Search: {'ENABLED' if args.lookahead else 'DISABLED'}")
     print_entries("Opponents", opponents)
     print_entries("Candidates", candidates)
 
@@ -724,6 +735,7 @@ def main() -> int:
         args.workers,
         cache_dir=cache_dir,
         force=args.force,
+        lookahead=args.lookahead,
     ):
         pair_index += 1
         print(

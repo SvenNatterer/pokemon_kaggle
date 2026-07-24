@@ -20,6 +20,7 @@ from wandb.integration.sb3 import WandbCallback
 from src.agents.rule_based_agent import is_rule_based_model_spec
 from src.utils import deck_display_name_for_path, model_display_name_for_path, resolve_deck_path, resolve_pool_path
 from src.league.experiment_registry import git_revision, registry_path, write_experiment
+from src.training.training_health import FeatureMetricsCallback, GuardrailMetricsCallback
 
 TRAINING_USES_POTENTIAL_REWARDS = True
 
@@ -73,12 +74,16 @@ class RewardBreakdownCallback(BaseCallback):
 
     def _on_rollout_end(self) -> None:
         for key, recent_values in self.episode_rewards.items():
-            if key == "potential":
+            if key in ("potential", "gameplan_bonus", "gameplan_violation_penalty"):
                 continue
             if len(recent_values) > 0:
                 if any(v != 0.0 for v in recent_values):
                     mean_val = sum(recent_values) / len(recent_values)
                     self.logger.record(f"rewards/{key}", mean_val)
+        for k in ("gameplan_bonus", "gameplan_violation_penalty"):
+            vals = self.episode_rewards.get(k, [])
+            mean_val = float(sum(vals) / len(vals)) if len(vals) > 0 else 0.0
+            self.logger.record(f"rewards/{k}", mean_val)
         if hasattr(self.model, "ep_info_buffer") and len(self.model.ep_info_buffer) > 0:
             ep_rewards = [ep_info["r"] for ep_info in self.model.ep_info_buffer]
             self.logger.record("rollout/ep_rew_max", max(ep_rewards))
@@ -165,12 +170,15 @@ def make_env(
     opp_deck_path,
     opp_model_path,
     sparse_rewards=False,
+    reward_config=None,
     opponent_pool=None,
     rotate_perspective=False,
     action_space_size=V6_ACTION_SPACE_SIZE,
     structured_v2=True,
     enable_lookahead_teacher=False,
     teacher_sample_rate=0.50,
+    inference_guardrails=False,
+    search_guardrail_rate=0.0,
 ):
     def _init():
         import torch
@@ -181,6 +189,7 @@ def make_env(
             deck,
             opp_deck,
             opponent_model_path=opp_model_path,
+            reward_config=reward_config,
             sparse_rewards=sparse_rewards,
             opponent_pool=opponent_pool,
             rotate_perspective=rotate_perspective,
@@ -188,6 +197,8 @@ def make_env(
             structured_v2=structured_v2,
             enable_lookahead_teacher=enable_lookahead_teacher,
             teacher_sample_rate=teacher_sample_rate,
+            inference_guardrails=inference_guardrails,
+            search_guardrail_rate=search_guardrail_rate,
         )
         return Monitor(env)
     return _init
@@ -262,6 +273,7 @@ def apply_config_dict(args: argparse.Namespace, config_dict: dict) -> None:
         "model_name": "model_name",
         "model": "model_name",
         "timesteps": "timesteps",
+        "total_timesteps": "timesteps",
         "n_steps": "n_steps",
         "batch_size": "batch_size",
         "n_epochs": "n_epochs",
@@ -271,15 +283,21 @@ def apply_config_dict(args: argparse.Namespace, config_dict: dict) -> None:
         "aux_coef": "aux_coef",
         "distill_coef": "distill_coef",
         "teacher_sample_rate": "teacher_sample_rate",
+        "base_model": "base_model",
         "opp_pool": "opp_pool",
         "opp_deck": "opp_deck",
         "opp_model": "opp_model",
         "seed": "seed",
         "sparse_rewards": "sparse_rewards",
         "endless": "endless",
+        "features_dim": "features_dim",
+        "hidden_dim": "hidden_dim",
+        "num_envs": "num_envs",
     }
     for k, v in config_dict.items():
-        if k in mapping:
+        if k == "rewards":
+            setattr(args, "reward_config", v)
+        elif k in mapping:
             setattr(args, mapping[k], v)
         elif hasattr(args, k):
             setattr(args, k, v)
@@ -297,6 +315,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--continue-existing", action="store_true", help="Explicitly continue the exact target model if it exists.")
     mode.add_argument("--overwrite", action="store_true", help="Train a new model and replace an existing target only after success.")
+    parser.add_argument("--base-model", type=str, default=None, help="Path to base model checkpoint to load weights from before training.")
     parser.add_argument("--opp-deck", type=str, help="Path to opponent deck.csv", default=None)
     parser.add_argument("--opp-model", type=str, help="Path to opponent model .zip", default=None)
     parser.add_argument("--opp-pool", type=str, default=None, help="JSON list of weighted opponent deck/model entries sampled per episode")
@@ -318,6 +337,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--belief-dim", type=int, default=64, help="Size of the learned belief embedding used by --belief-actor")
     parser.add_argument("--no-belief-detach", dest="belief_detach", action="store_false", help="Allow PPO loss gradients into the belief encoder")
     parser.add_argument("--no-rotate-perspective", dest="rotate_perspective", action="store_false", help="Disable random perspective rotation")
+    parser.add_argument("--features-dim", type=int, default=256, help="Dimension of feature extractor output")
+    parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension for policy MLP/LSTM layers")
     parser.add_argument("--seed", type=int, default=None, help="Policy and vector-environment seed for reproducible experiment families")
     parser.add_argument(
         "--policy-version",
@@ -383,6 +404,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ],
         help="Opponent manifest reserved for validation/final evaluation; training overlap is rejected.",
     )
+    parser.add_argument(
+        "--torch-threads",
+        type=int,
+        default=int(os.getenv("TORCH_THREADS", "2")),
+        help="Number of PyTorch CPU threads for main process (default: 2 for Daytime mode, 0 for Nighttime/full speed).",
+    )
     parser.set_defaults(
         belief_actor=True,
         belief_detach=True,
@@ -408,9 +435,11 @@ def parse_args_with_config(argv: list[str] | None = None, parser: argparse.Argum
                     flag = tok.lstrip("-").split("=")[0].replace("-", "_")
                     cli_supplied.add(flag)
         for k, v in yaml_dict.items():
-            mapped_key = "lr" if k in ("learning_rate", "lr") else ("model_name" if k in ("model", "model_name") else k)
+            mapped_key = "lr" if k in ("learning_rate", "lr") else ("model_name" if k in ("model", "model_name") else ("timesteps" if k in ("total_timesteps", "timesteps") else k))
             if mapped_key not in cli_supplied and hasattr(args, mapped_key):
                 setattr(args, mapped_key, v)
+        if "rewards" in yaml_dict and not getattr(args, "reward_config", None):
+            setattr(args, "reward_config", yaml_dict["rewards"])
 
     # Defaults for deck and model_name if missing
     if not args.deck:
@@ -450,6 +479,14 @@ def parse_queue_item(item: Any, parser: argparse.ArgumentParser) -> argparse.Nam
 
 
 def run_single_training(args: argparse.Namespace) -> None:
+    torch_threads = getattr(args, "torch_threads", 2)
+    if torch_threads is not None and torch_threads > 0:
+        import torch
+        torch.set_num_threads(torch_threads)
+        print(f"[Daytime Mode] PyTorch main process restricted to {torch_threads} CPU threads for lag-free operation.")
+    else:
+        print("[Nighttime Mode] PyTorch main process using default full-capacity CPU threads.")
+
     opp_deck_path = args.opp_deck if args.opp_deck else args.deck
     from scripts.check_holdout_safe import check_paths
     reserved_files = ["decks/holdout_opponents.json", *args.reserved_opponents]
@@ -465,6 +502,7 @@ def run_single_training(args: argparse.Namespace) -> None:
         )
     opponent_pool = load_opponent_pool(args.opp_pool)
     action_space_size = V6_ACTION_SPACE_SIZE
+    reward_config = getattr(args, "reward_config", None)
     
     opponent_description = f"pool {args.opp_pool}" if opponent_pool else opp_deck_path
     print(f"Initializing environment with {args.num_envs} workers for deck {args.deck} against {opponent_description}...")
@@ -474,12 +512,15 @@ def run_single_training(args: argparse.Namespace) -> None:
             opp_deck_path,
             args.opp_model,
             args.sparse_rewards,
+            reward_config=reward_config,
             opponent_pool=opponent_pool,
             rotate_perspective=args.rotate_perspective,
             action_space_size=action_space_size,
             structured_v2=not args.scalar_obs,
             enable_lookahead_teacher=args.enable_lookahead_teacher,
             teacher_sample_rate=args.teacher_sample_rate,
+            inference_guardrails=args.inference_guardrails,
+            search_guardrail_rate=args.search_guardrail_rate,
         )
         for _ in range(args.num_envs)
     ])
@@ -498,6 +539,10 @@ def run_single_training(args: argparse.Namespace) -> None:
     }
     write_experiment(experiment_file, experiment)
 
+    base_model_path = getattr(args, "base_model", None)
+    should_load_existing = args.continue_existing or (base_model_path is not None)
+    source_model_path = resolve_model_path(base_model_path) if base_model_path else model_path
+
     target_exists = os.path.exists(f"{model_path}.zip")
     if target_exists and not args.continue_existing and not args.overwrite:
         env.close()
@@ -505,13 +550,14 @@ def run_single_training(args: argparse.Namespace) -> None:
             f"Target model already exists: {model_path}.zip. Use --continue-existing to continue that exact "
             "final model or --overwrite to deliberately train a new replacement."
         )
-    if args.continue_existing and not target_exists:
+    source_exists = os.path.exists(f"{source_model_path}.zip")
+    if should_load_existing and not source_exists:
         env.close()
-        raise FileNotFoundError(f"Cannot continue missing target model: {model_path}.zip")
+        raise FileNotFoundError(f"Cannot continue missing source model: {source_model_path}.zip")
 
-    if args.continue_existing:
-        print(f"Explicitly continuing target model {model_path}.zip...")
-        model = CustomPPO.load(model_path, env=env, device="cpu")
+    if should_load_existing:
+        print(f"Loading base checkpoint {source_model_path}.zip to train target {model_path}.zip...")
+        model = CustomPPO.load(source_model_path, env=env, device="cpu")
         try:
             validate_policy_action_space(model, action_space_size, args.policy_version)
         except RuntimeError:
@@ -580,12 +626,13 @@ def run_single_training(args: argparse.Namespace) -> None:
             for param_group in model.policy.optimizer.param_groups:
                 param_group['lr'] = args.lr
     else:
-        print("Creating new Custom PPO model...")
-        
         from src.models.custom_policy import PokemonTCGFeatureExtractor
+        features_dim = getattr(args, "features_dim", 256)
+        hidden_dim = getattr(args, "hidden_dim", 128)
         policy_kwargs = dict(
             features_extractor_class=PokemonTCGFeatureExtractor,
             features_extractor_kwargs={
+                "features_dim": features_dim,
                 "feature_variant": args.feature_variant,
                 "use_card_table": args.card_table,
             },
@@ -593,6 +640,8 @@ def run_single_training(args: argparse.Namespace) -> None:
             belief_dim=args.belief_dim,
             detach_belief_actor=args.belief_detach,
         )
+        if features_dim != 256 or hidden_dim != 128:
+            policy_kwargs["net_arch"] = dict(pi=[hidden_dim, hidden_dim], vf=[hidden_dim, hidden_dim])
         
         model = CustomPPO(
             PokemonTCGRecurrentPolicy, 
@@ -628,7 +677,16 @@ def run_single_training(args: argparse.Namespace) -> None:
     action_text = f"🧠 Training: {deck_name} vs {opp_name}"
     
     run_suffix = "endless" if endless_training else str(args.timesteps)
-    run_name = os.environ.get("WANDB_NAME", f"D{deck_id}_vs_D{opp_id}_{run_suffix}")
+    if "WANDB_NAME" in os.environ:
+        run_name = os.environ["WANDB_NAME"]
+    elif getattr(args, "config", None):
+        config_stem = Path(args.config).stem
+        run_name = f"{config_stem}_{run_suffix}"
+    elif getattr(args, "model_name", None):
+        model_stem = Path(args.model_name).stem
+        run_name = f"{model_stem}_{run_suffix}"
+    else:
+        run_name = f"D{deck_id}_vs_D{opp_id}_{run_suffix}"
     
     run = wandb.init(
         project="pokemon_kaggle",
@@ -638,7 +696,7 @@ def run_single_training(args: argparse.Namespace) -> None:
         sync_tensorboard=True,
         monitor_gym=True,
         save_code=True,
-        dir="/tmp",
+        dir="logs/",
         mode=os.environ.get("WANDB_MODE", "online"),
     )
     tb_run_id = getattr(run, "id", None) or str(int(time.time()))
@@ -652,7 +710,9 @@ def run_single_training(args: argparse.Namespace) -> None:
         verbose=2,
     )
     reward_callback = RewardBreakdownCallback()
-    callbacks = CallbackList([live_status_callback, wandb_callback, reward_callback])
+    guardrail_callback = GuardrailMetricsCallback()
+    feature_callback = FeatureMetricsCallback()
+    callbacks = CallbackList([live_status_callback, wandb_callback, reward_callback, guardrail_callback, feature_callback])
 
     def handle_stop_signal(signum, frame):
         raise KeyboardInterrupt
@@ -717,7 +777,9 @@ def train(argv: list[str] | None = None) -> None:
         add_to_queue(target_queue, args.add_to_queue)
         return
 
-    has_initial_job = bool(args.deck and args.model_name) or bool(args.config)
+    cli_args = argv if argv is not None else sys.argv[1:]
+    has_explicit_cli_job = any(tok.startswith("--deck") or tok.startswith("--config") or tok.startswith("--opp-") for tok in cli_args)
+    has_initial_job = has_explicit_cli_job or (queue_path is None and bool(args.deck and args.model_name))
 
     if has_initial_job:
         run_single_training(args)

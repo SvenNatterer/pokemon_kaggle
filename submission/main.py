@@ -58,6 +58,10 @@ from src.env.env_wrapper import (
 
 import time
 
+ENABLE_LOOKAHEAD = True
+MIN_LOOKAHEAD_OVERAGE_SECONDS = 45.0
+MAX_LOOKAHEAD_ACCUMULATED_SECONDS = 480.0
+
 model = None
 dummy_env = None
 lstm_state = None
@@ -180,18 +184,28 @@ def agent(obs_dict: dict) -> list[int]:
             model_path = "/kaggle_simulations/agent/" + model_path
         
         try:
-            model = CustomPPO.load(model_path, device='cpu')
+            raw_model = CustomPPO.load(model_path, device='cpu')
             my_deck = read_deck_csv()
             action_space_size = int(
-                getattr(getattr(model, "action_space", None), "n", LEGACY_ACTION_SPACE_SIZE)
+                getattr(getattr(raw_model, "action_space", None), "n", LEGACY_ACTION_SPACE_SIZE)
             )
             dummy_env = PokemonTCGEnv(
                 my_deck,
                 my_deck,
                 action_space_size=action_space_size,
                 inference_guardrails=True,
-                zone_aux_targets=bool(getattr(model.policy, "use_zone_aux", False)),
+                zone_aux_targets=bool(getattr(raw_model.policy, "use_zone_aux", False)),
             )
+            if ENABLE_LOOKAHEAD:
+                try:
+                    from src.models.lookahead_inference import LookaheadInferenceAgent
+                    model = LookaheadInferenceAgent(raw_model, my_deck=my_deck, opponent_deck=my_deck)
+                    print("[INFO] LookaheadInferenceAgent initialized successfully for Kaggle submission.", file=sys.stderr)
+                except Exception as ex:
+                    print(f"[WARNING] LookaheadInferenceAgent init failed: {ex}. Using base model.", file=sys.stderr)
+                    model = raw_model
+            else:
+                model = raw_model
         except Exception as e:
             print(f"[ERROR] Model initialization failed: {e}. Switching to fallback mode.", file=sys.stderr)
             fallback_mode = True
@@ -223,12 +237,22 @@ def agent(obs_dict: dict) -> list[int]:
                 pending_selection=pending,
             )
 
-            action, lstm_state = model.predict(
-                formatted_obs,
-                state=lstm_state,
-                episode_start=np.array([episode_start], dtype=bool),
-                deterministic=True,
-            )
+            predict_kwargs = {
+                "state": lstm_state,
+                "episode_start": np.array([episode_start], dtype=bool),
+                "deterministic": True,
+            }
+            # Check time remaining before attempting C++ engine lookahead search
+            rem_overage = float(obs_dict.get("remainingOverageTime", 999.0))
+            if (
+                ENABLE_LOOKAHEAD
+                and rem_overage >= MIN_LOOKAHEAD_OVERAGE_SECONDS
+                and match_accumulated_time < MAX_LOOKAHEAD_ACCUMULATED_SECONDS
+            ):
+                predict_kwargs["raw_observation"] = obs
+                predict_kwargs["perspective"] = perspective
+
+            action, lstm_state = model.predict(formatted_obs, **predict_kwargs)
             episode_start = False
             action = int(np.asarray(action).item())
         except Exception as e:

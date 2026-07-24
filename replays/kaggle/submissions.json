@@ -144,7 +144,67 @@
       "description": "V6 Compact bank_54 scratch PFSP endless 2026-07-17",
       "file_name": "submission_v6_compact_scratch_pfsp_endless_20260717.tar.gz",
       "status": "COMPLETE"
+    },
+    "54815682": {
+      "date": "2026-07-18T20:35:40.580000",
+      "description": "Alakazam V6 compact PFSP 2M \u2014 dev pool",
+      "file_name": "submission_v6_compact_alakazam_pfsp_2m_20260718.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54834368": {
+      "date": "2026-07-19T15:51:05.537000",
+      "description": "V6 Compact Hydrapple bank_70 | new validation 89.0% | holdout 84.4%",
+      "file_name": "submission_v6_compact_hydrapple_bank70_20260719.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54852470": {
+      "date": "2026-07-20T11:35:03.373000",
+      "description": "V6 compact Mewtwo bank38 2026-07-20",
+      "file_name": "submission_v6_compact_mewtwo_bank38_20260720.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54852478": {
+      "date": "2026-07-20T11:35:25.817000",
+      "description": "mew_tew 4mio",
+      "file_name": "submission_v6_compact_mewtwo_bank38_20260720.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54898833": {
+      "date": "2026-07-22T09:03:56.040000",
+      "description": "Team Rocket Mewtwo ex (v6 compact, 2M steps, bank_38)",
+      "file_name": "submission_mewtwo_bank38.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54898858": {
+      "date": "2026-07-22T09:05:14.650000",
+      "description": "Team Rocket Mewtwo ex (v6 compact, 2M steps, bank_38) - Submission #2",
+      "file_name": "submission_mewtwo_bank38_sub2.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54901090": {
+      "date": "2026-07-22T11:10:32.003000",
+      "description": "",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54922531": {
+      "date": "2026-07-23T07:48:46.713000",
+      "description": "EXP-007 Prize Mapping & Opponent Archetype Model (71.5% Holdout Win Rate)",
+      "file_name": "submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54944315": {
+      "date": "2026-07-24T06:06:21.603000",
+      "description": "EXP-016 7M PFSP League + Inference-Time Lookahead Search (88.3% Holdout)",
+      "file_name": "submission_exp016_7m_lookahead.tar.gz",
+      "status": "COMPLETE"
+    },
+    "54944334": {
+      "date": "2026-07-24T06:07:43.090000",
+      "description": "EXP-016 7M PFSP League + Inference-Time Lookahead Search - Submission #2",
+      "file_name": "submission_exp016_7m_lookahead_2.tar.gz",
+      "status": "COMPLETE"
     }
   },
-  "updated_at": "2026-07-18T20:35:30.943177+00:00"
+  "updated_at": "2026-07-24T07:12:12.072859+00:00"
 }

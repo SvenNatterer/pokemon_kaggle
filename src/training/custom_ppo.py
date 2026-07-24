@@ -275,6 +275,7 @@ class CustomPPO(RecurrentPPO):
         self._update_learning_rate(self.policy.optimizer)
         
         entropy_losses = []
+        attn_entropies = []
         pg_losses, value_losses, aux_losses, distill_losses = [], [], [], []
         aux_precision_at_20, aux_recall_at_20, aux_count_scaled_mae = [], [], []
         clip_fractions = []
@@ -354,6 +355,8 @@ class CustomPPO(RecurrentPPO):
                     entropy_loss = -torch.mean(entropy[mask])
 
                 entropy_losses.append(entropy_loss.item())
+                if hasattr(self.policy, "features_extractor") and hasattr(self.policy.features_extractor, "latest_attn_entropy"):
+                    attn_entropies.append(float(self.policy.features_extractor.latest_attn_entropy))
 
                 aux_loss = None
                 if aux_logits is not None:
@@ -441,6 +444,9 @@ class CustomPPO(RecurrentPPO):
         explained_var = explained_variance(self.rollout_buffer.values.flatten(), self.rollout_buffer.returns.flatten())
 
         # Logs
+        mean_attn_entropy = float(np.mean(attn_entropies)) if attn_entropies else 0.0
+        self.logger.record("train/attention_entropy", mean_attn_entropy)
+        self.logger.record("features/attention_entropy", mean_attn_entropy)
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))

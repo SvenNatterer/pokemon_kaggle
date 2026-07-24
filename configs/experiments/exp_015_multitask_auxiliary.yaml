@@ -1,0 +1,41 @@
+# EXP-015: Multi-Task Auxiliary Loss Heads (4 Workers, 1M Steps)
+deck: decks/deck_bank/bank_38.csv
+model_name: models/ppo_v6_exp015_multitask_auxiliary.zip
+opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
+algorithm: PPO
+total_timesteps: 1000000
+learning_rate: 0.0001
+n_steps: 512
+batch_size: 2048
+n_epochs: 2
+gamma: 0.999
+gae_lambda: 0.95
+clip_range: 0.12
+ent_coef: 0.008
+aux_coef: 0.15
+distill_coef: 0.1
+teacher_sample_rate: 0.01
+num_envs: 4
+
+features_dim: 256
+hidden_dim: 256
+aux_heads:
+  win_predict_coef: 0.1
+  archetype_coef: 0.1
+
+features:
+  prize_mapping: true
+  archetype_prediction: true
+  wandb_logging: true
+
+lookahead:
+  max_depth: 1
+  beam_width: 2
+  node_budget: 8
+  max_combinations: 16
+
+rewards:
+  STEP_PENALTY: -0.001
+  DECK_OUT_PENALTY: -0.50
+  DECK_SHRINK: -0.005
+  DECK_LOW_COUNT_MULT: 4.0

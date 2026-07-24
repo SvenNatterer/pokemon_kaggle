@@ -8,7 +8,6 @@ import numpy as np
 # Add src to pythonpath so imports work
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from stable_baselines3 import PPO
 from src.env.env_wrapper import LEGACY_ACTION_SPACE_SIZE, PokemonTCGEnv, _fit_observation_to_model_space, read_sample_deck
 from src.cg.game import visualize_data
 import pandas as pd
@@ -23,7 +22,7 @@ def read_deck(deck_path):
     df = pd.read_csv(resolved, header=None)
     return df[0].tolist()
 
-def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_path):
+def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_path, enable_lookahead=False):
     print(f"Loading models for replay...")
     deck_a = read_deck(deck_a_path)
     deck_b = read_deck(deck_b_path)
@@ -35,7 +34,15 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
         print("Model loaded successfully.")
     else:
         print("Model not found! Generating replay using random actions instead.")
-        
+
+    if enable_lookahead and model is not None:
+        try:
+            from src.models.lookahead_inference import LookaheadInferenceAgent
+            print("Wrapping candidate model with LookaheadInferenceAgent...")
+            model = LookaheadInferenceAgent(model, my_deck=deck_a, opponent_deck=deck_b)
+        except Exception as e:
+            print(f"Warning: Could not enable LookaheadInferenceAgent: {e}")
+
     action_space_size = int(
         getattr(getattr(model, "action_space", None), "n", LEGACY_ACTION_SPACE_SIZE)
     )
@@ -63,12 +70,19 @@ def generate_replay(model_a_path, deck_a_path, model_b_path, deck_b_path, out_pa
                     obs_for_model = _fit_observation_to_model_space(obs, model_space)
                 else:
                     obs_for_model = obs
-                action, lstm_state = model.predict(
-                    obs_for_model,
-                    state=lstm_state,
-                    episode_start=episode_start,
-                    deterministic=False,
-                )
+
+                predict_kwargs = {
+                    "state": lstm_state,
+                    "episode_start": episode_start,
+                    "deterministic": False,
+                }
+                if enable_lookahead and hasattr(env, "obs"):
+                    from src.cg.api import to_observation_class
+                    raw_obs = to_observation_class(env.obs)
+                    predict_kwargs["raw_observation"] = raw_obs
+                    predict_kwargs["perspective"] = env.learner_perspective
+
+                action, lstm_state = model.predict(obs_for_model, **predict_kwargs)
                 episode_start = np.zeros((1,), dtype=bool)
             else:
                 valid_actions = [i for i, mask in enumerate(obs["action_mask"]) if mask == 1]
@@ -142,6 +156,7 @@ def generate_replay_batch(
     deck_b_path: str | None = None,
     out_dir: str | None = None,
     num_games: int | None = None,
+    enable_lookahead: bool = False,
 ) -> list[str]:
     from pathlib import Path
 
@@ -208,6 +223,7 @@ def generate_replay_batch(
                 model_b_path=str(opp["model"]),
                 deck_b_path=str(opp["deck"]),
                 out_path=str(out_file),
+                enable_lookahead=enable_lookahead,
             )
             print(f"  -> Saved replay to {out_file}\n")
             generated_files.append(str(out_file))

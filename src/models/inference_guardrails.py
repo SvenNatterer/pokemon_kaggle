@@ -11,6 +11,13 @@ from typing import Any
 
 import numpy as np
 
+from src.models.deck_archetypes import (
+    detect_deck_archetypes,
+    TR_MEWTWO_EX_CARD_ID,
+    TR_SPIDOPS_CARD_ID,
+    ENERGY_SWITCH_CARD_ID,
+)
+
 
 POWERFUL_HAND_ATTACK_ID = 1072
 MIST_ENERGY_CARD_ID = 11
@@ -46,6 +53,525 @@ class GuardrailIntervention:
         return asdict(self)
 
 
+
+class GuardrailRule:
+    """Base class for all guardrail rules."""
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        raise NotImplementedError
+
+
+class GameplanEvaluator:
+    """Base class for archetype-specific reward shaping rules."""
+    def evaluate(self, env: Any, old_obs: Any, chosen_option: Any) -> float:
+        raise NotImplementedError
+
+
+class TR38GameplanEvaluator(GameplanEvaluator):
+    def evaluate(self, env: Any, old_obs: Any, chosen_option: Any) -> float:
+        reward = 0.0
+        bonus = 0.005
+        penalty = -0.015
+        
+        me = old_obs.current.players[env.learner_perspective]
+        def is_tr_pokemon(card_id):
+            if not card_id:
+                return False
+            cid = _as_int(card_id)
+            if cid in (TR_MEWTWO_EX_CARD_ID, TR_SPIDOPS_CARD_ID):
+                return True
+            card = env.card_data_by_id.get(cid)
+            if not card:
+                return False
+            cname = getattr(card, "name", "")
+            return "rocket" in cname.lower() or "team rocket" in cname.lower()
+            
+        tr_count = 0
+        if me.active and len(me.active) > 0 and me.active[0]:
+            active_id = _as_int(getattr(me.active[0], "id", getattr(me.active[0], "card_id", None)))
+            if is_tr_pokemon(active_id):
+                tr_count += 1
+        for b in (getattr(me, "bench", []) or []):
+            if b:
+                b_id = _as_int(getattr(b, "id", getattr(b, "card_id", None)))
+                if is_tr_pokemon(b_id):
+                    tr_count += 1
+        
+        opt_type = getattr(chosen_option, "type", None)
+        card_id = _as_int(getattr(chosen_option, "card_id", getattr(chosen_option, "cardId", None)))
+        
+        is_bench_action = getattr(chosen_option, "isBench", False) or opt_type in (3, 4, "BENCH", "BENCH_POKEMON")
+        if is_bench_action:
+            if is_tr_pokemon(card_id):
+                if tr_count < 4:
+                    reward += bonus
+            else:
+                if tr_count < 4 and len(getattr(me, "bench", []) or []) >= getattr(me, "maxBench", 3) - 1:
+                    reward += penalty
+
+        is_ability = getattr(chosen_option, "isAbility", False) or opt_type in (12, "ABILITY")
+        if is_ability and card_id == TR_SPIDOPS_CARD_ID:
+            reward += bonus
+            
+        is_item = getattr(chosen_option, "isPlayableItem", False) or opt_type in (6, "ITEM", "PLAY_ITEM")
+        if is_item and card_id == ENERGY_SWITCH_CARD_ID:
+            if me.active and len(me.active) > 0 and me.active[0]:
+                active_cid = _as_int(getattr(me.active[0], "id", getattr(me.active[0], "card_id", None)))
+                if active_cid == TR_MEWTWO_EX_CARD_ID:
+                    reward += (bonus / 2.0)
+        
+        return reward
+
+
+class NoEffectAttackGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        current = obs.current
+        select = obs.select
+        players = current.players
+        opponent_active = list(getattr(players[opponent_index], "active", None) or [])
+        target = opponent_active[0] if opponent_active else None
+        if target is None:
+            return
+
+        target_serial = _as_int(getattr(target, "serial", None))
+        target_card_id = _as_int(getattr(target, "id", None))
+        current_turn = _as_int(getattr(current, "turn", None), 0)
+        protected_by_splashing_dodge = (
+            engine._fully_protected_turn_by_serial.get(target_serial) == current_turn
+        )
+        protected_by_mist_energy = engine._has_attached_card(target, MIST_ENERGY_CARD_ID)
+        protected_by_rock_fighting_energy = (
+            engine._has_attached_card(target, ROCK_FIGHTING_ENERGY_CARD_ID)
+            and engine._is_fighting_pokemon(target)
+        )
+        opponent_bench = list(getattr(players[opponent_index], "bench", None) or [])
+        repelling_veil_in_play = any(
+            pokemon is not None
+            and _as_int(getattr(pokemon, "id", None)) == TEAM_ROCKET_ARTICUNO_CARD_ID
+            for pokemon in opponent_active + opponent_bench
+        )
+        protected_by_repelling_veil = (
+            repelling_veil_in_play
+            and target_card_id in engine._basic_team_rocket_card_ids
+        )
+        if not any(
+            (
+                protected_by_splashing_dodge,
+                protected_by_mist_energy,
+                protected_by_rock_fighting_energy,
+                protected_by_repelling_veil,
+            )
+        ):
+            return
+
+        for index, option in enumerate(list(getattr(select, "option", None) or [])):
+            if index >= len(guarded_mask) or not guarded_mask[index]:
+                continue
+            attack_id = _as_int(getattr(option, "attackId", None))
+            if attack_id != POWERFUL_HAND_ATTACK_ID:
+                continue
+
+            if protected_by_splashing_dodge:
+                rule = "powerful_hand_blocked_by_splashing_dodge"
+            elif protected_by_mist_energy:
+                rule = "powerful_hand_blocked_by_mist_energy"
+            elif protected_by_rock_fighting_energy:
+                rule = "powerful_hand_blocked_by_rock_fighting_energy"
+            else:
+                rule = "powerful_hand_blocked_by_repelling_veil"
+            guarded_mask[index] = 0
+            interventions.append(
+                GuardrailIntervention(
+                    option_index=index,
+                    rule=rule,
+                    attack_id=attack_id,
+                    target_serial=target_serial,
+                )
+            )
+
+
+
+class LethalWinGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        lethal_indices = []
+        for index, option in enumerate(options):
+            if index < len(guarded_mask) and guarded_mask[index]:
+                if bool(getattr(option, "isLethal", False)):
+                    lethal_indices.append(index)
+
+        if not lethal_indices:
+            return
+
+        for index in range(min(len(options), len(guarded_mask))):
+            if guarded_mask[index] and index not in lethal_indices:
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="guaranteed_lethal_win_override",
+                        attack_id=_as_int(getattr(options[index], "attackId", None)),
+                        target_serial=_as_int(getattr(options[index], "targetSerial", None)),
+                    )
+                )
+
+
+
+class SelfKOGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        current = obs.current
+        player = current.players[player_index]
+        active = list(getattr(player, "active", None) or [])
+        if not active:
+            return
+        active_hp = _as_int(getattr(active[0], "hp", None), 999)
+
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        active_mask = [i for i, m in enumerate(guarded_mask[:len(options)]) if m]
+        if len(active_mask) <= 1:
+            return
+
+        for index in active_mask:
+            option = options[index]
+            recoil = _as_int(getattr(option, "recoilHp", None), 0)
+            is_self_ko = bool(getattr(option, "selfKo", False)) or (recoil >= active_hp > 0)
+            if is_self_ko:
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="prevent_self_ko",
+                        attack_id=_as_int(getattr(option, "attackId", None)),
+                        target_serial=_as_int(getattr(option, "targetSerial", None)),
+                    )
+                )
+
+
+
+class EmptyDeckSearchGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        current = obs.current
+        player = current.players[player_index]
+        deck_count = _as_int(getattr(player, "deckCount", None), -1)
+        if deck_count != 0:
+            return
+
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        for index, option in enumerate(options):
+            if index < len(guarded_mask) and guarded_mask[index]:
+                if bool(getattr(option, "isSearch", False)) or bool(getattr(option, "searchesDeck", False)):
+                    guarded_mask[index] = 0
+                    interventions.append(
+                        GuardrailIntervention(
+                            option_index=index,
+                            rule="empty_deck_search",
+                            attack_id=_as_int(getattr(option, "attackId", None)),
+                            target_serial=_as_int(getattr(option, "targetSerial", None)),
+                        )
+                    )
+
+
+
+class WastedEnergyAttachmentGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        active_indices = [i for i, m in enumerate(guarded_mask[:len(options)]) if m]
+        if len(active_indices) <= 1:
+            return
+
+        for index in active_indices:
+            option = options[index]
+            if bool(getattr(option, "isWastedAttach", False)):
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="wasted_energy_attachment",
+                        attack_id=_as_int(getattr(option, "attackId", None)),
+                        target_serial=_as_int(getattr(option, "targetSerial", None)),
+                    )
+                )
+
+
+
+class DiscardDrawSequenceGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        active_indices = [i for i, m in enumerate(guarded_mask[:len(options)]) if m]
+
+        has_playable_non_draw = any(
+            bool(getattr(options[i], "isPlayableItem", False)) or bool(getattr(options[i], "isEvolution", False))
+            for i in active_indices
+        )
+        if not has_playable_non_draw:
+            return
+
+        for index in active_indices:
+            option = options[index]
+            if bool(getattr(option, "isDiscardDraw", False)):
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="discard_draw_sequence",
+                        attack_id=_as_int(getattr(option, "attackId", None)),
+                        target_serial=_as_int(getattr(option, "targetSerial", None)),
+                    )
+                )
+
+
+
+class BenchCloggingGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        current = obs.current
+        player = current.players[player_index]
+        bench = list(getattr(player, "bench", None) or [])
+        max_bench = _as_int(getattr(player, "maxBench", None), 3)
+        if len(bench) < max_bench - 1:
+            return
+
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        active_indices = [i for i, m in enumerate(guarded_mask[:len(options)]) if m]
+        if len(active_indices) <= 1:
+            return
+
+        for index in active_indices:
+            option = options[index]
+            if bool(getattr(option, "isBench", False)) and bool(getattr(option, "isLowPriorityBench", False)):
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="bench_clogging_protection",
+                        attack_id=_as_int(getattr(option, "attackId", None)),
+                        target_serial=_as_int(getattr(option, "targetSerial", None)),
+                    )
+                )
+
+
+
+class ZeroEffectRecycleGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        current = obs.current
+        player = current.players[player_index]
+        discard = list(getattr(player, "discard", None) or [])
+        discard_count = _as_int(getattr(player, "discardCount", len(discard)), len(discard))
+
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        active_indices = [i for i, m in enumerate(guarded_mask[:len(options)]) if m]
+        if len(active_indices) <= 1:
+            return
+
+        for index in active_indices:
+            option = options[index]
+            is_recycle = bool(getattr(option, "isZeroEffectRecycle", False)) or (
+                bool(getattr(option, "isRecycleItem", False)) and discard_count == 0
+            )
+            if is_recycle:
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="zero_effect_item_filter",
+                        attack_id=_as_int(getattr(option, "attackId", None)),
+                        target_serial=_as_int(getattr(option, "targetSerial", None)),
+                    )
+                )
+
+
+
+class PreventSuicidalDeckoutGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        current = obs.current
+        player = current.players[player_index]
+        deck_count = _as_int(getattr(player, "deckCount", None), -1)
+        if deck_count <= 0:
+            return
+
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        active_indices = [i for i, m in enumerate(guarded_mask[:len(options)]) if m]
+        if len(active_indices) <= 1:
+            return
+
+        has_lethal = any(bool(getattr(options[i], "isLethal", False)) for i in active_indices)
+        if has_lethal:
+            return
+
+        for index in active_indices:
+            option = options[index]
+            cards_to_draw = _as_int(getattr(option, "cardsToDraw", None), 0)
+            is_suicidal_draw = bool(getattr(option, "isHeavyDraw", False)) and cards_to_draw >= deck_count
+            if is_suicidal_draw or (cards_to_draw > 0 and cards_to_draw >= deck_count and bool(getattr(option, "isDrawAction", False))):
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="prevent_suicidal_deckout",
+                        attack_id=_as_int(getattr(option, "attackId", None)),
+                        target_serial=_as_int(getattr(option, "targetSerial", None)),
+                    )
+                )
+
+
+
+class SoleWinConDiscardGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        active_indices = [i for i, m in enumerate(guarded_mask[:len(options)]) if m]
+        if len(active_indices) <= 1:
+            return
+
+        for index in active_indices:
+            option = options[index]
+            if bool(getattr(option, "isSoleWinConDiscard", False)) or bool(getattr(option, "isSoleStage2Discard", False)):
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="sole_wincon_discard_protection",
+                        attack_id=_as_int(getattr(option, "attackId", None)),
+                        target_serial=_as_int(getattr(option, "targetSerial", None)),
+                    )
+                )
+
+
+
+class LethalEnergyPriorityGuardrail(GuardrailRule):
+    def apply(
+        self,
+        engine: 'InferenceGuardrails',
+        obs: Any,
+        guarded_mask: np.ndarray,
+        interventions: list[GuardrailIntervention],
+        player_index: int,
+        opponent_index: int
+    ) -> None:
+        select = obs.select
+        options = list(getattr(select, "option", None) or [])
+        active_indices = [i for i, m in enumerate(guarded_mask[:len(options)]) if m]
+        if len(active_indices) <= 1:
+            return
+
+        has_active_lethal_attach = any(
+            bool(getattr(options[i], "isActiveLethalAttach", False)) or bool(getattr(options[i], "isLethalAttach", False))
+            for i in active_indices
+        )
+        if not has_active_lethal_attach:
+            return
+
+        for index in active_indices:
+            option = options[index]
+            if bool(getattr(option, "isBenchAttach", False)) or bool(getattr(option, "isBenchEnergyAttach", False)):
+                guarded_mask[index] = 0
+                interventions.append(
+                    GuardrailIntervention(
+                        option_index=index,
+                        rule="lethal_energy_priority",
+                        attack_id=_as_int(getattr(option, "attackId", None)),
+                        target_serial=_as_int(getattr(option, "targetSerial", None)),
+                    )
+                )
+
+
+
+
+
 class InferenceGuardrails:
     """Track temporary protection and mask only guaranteed no-effect attacks."""
 
@@ -53,9 +579,37 @@ class InferenceGuardrails:
         self,
         card_energy_types: dict[int, int] | None = None,
         basic_team_rocket_card_ids: set[int] | None = None,
+        my_deck: list[int] | None = None,
     ) -> None:
         self._card_energy_types = dict(card_energy_types or {})
         self._basic_team_rocket_card_ids = set(basic_team_rocket_card_ids or ())
+        self._my_deck = list(my_deck or [])
+        self._archetypes = detect_deck_archetypes(self._my_deck)
+
+        # 1. General rules (always applied)
+        self.rules: list[GuardrailRule] = [
+            NoEffectAttackGuardrail(),
+            LethalWinGuardrail(),
+            SelfKOGuardrail(),
+            EmptyDeckSearchGuardrail(),
+            WastedEnergyAttachmentGuardrail(),
+            DiscardDrawSequenceGuardrail(),
+            BenchCloggingGuardrail(),
+            ZeroEffectRecycleGuardrail(),
+            PreventSuicidalDeckoutGuardrail(),
+            SoleWinConDiscardGuardrail(),
+            LethalEnergyPriorityGuardrail()
+        ]
+        
+        # 2. Archetype-specific rules (dynamically added based on detected deck fingerprints)
+        # Example for future rules:
+        # if "TR_MEWTWO_BENCH_STRATEGY" in self._archetypes:
+        #     self.rules.append(TRMewtwoBenchGuardrail())
+        
+        self.gameplan_evaluators: list[GameplanEvaluator] = []
+        if "TR38_MEWTWO" in self._archetypes:
+            self.gameplan_evaluators.append(TR38GameplanEvaluator())
+
         self.reset()
 
     def set_card_energy_types(self, card_energy_types: dict[int, int]) -> None:
@@ -168,71 +722,16 @@ class InferenceGuardrails:
             return encoded_obs, []
 
         players = list(getattr(current, "players", None) or [])
-        opponent_index = 1 - int(perspective)
-        if opponent_index < 0 or opponent_index >= len(players):
-            return encoded_obs, []
-        opponent_active = list(getattr(players[opponent_index], "active", None) or [])
-        target = opponent_active[0] if opponent_active else None
-        if target is None:
-            return encoded_obs, []
-
-        target_serial = _as_int(getattr(target, "serial", None))
-        target_card_id = _as_int(getattr(target, "id", None))
-        current_turn = _as_int(getattr(current, "turn", None), 0)
-        protected_by_splashing_dodge = (
-            self._fully_protected_turn_by_serial.get(target_serial) == current_turn
-        )
-        protected_by_mist_energy = self._has_attached_card(target, MIST_ENERGY_CARD_ID)
-        protected_by_rock_fighting_energy = (
-            self._has_attached_card(target, ROCK_FIGHTING_ENERGY_CARD_ID)
-            and self._is_fighting_pokemon(target)
-        )
-        opponent_bench = list(getattr(players[opponent_index], "bench", None) or [])
-        repelling_veil_in_play = any(
-            pokemon is not None
-            and _as_int(getattr(pokemon, "id", None)) == TEAM_ROCKET_ARTICUNO_CARD_ID
-            for pokemon in opponent_active + opponent_bench
-        )
-        protected_by_repelling_veil = (
-            repelling_veil_in_play
-            and target_card_id in self._basic_team_rocket_card_ids
-        )
-        if not any(
-            (
-                protected_by_splashing_dodge,
-                protected_by_mist_energy,
-                protected_by_rock_fighting_energy,
-                protected_by_repelling_veil,
-            )
-        ):
+        player_index = int(perspective)
+        opponent_index = 1 - player_index
+        if player_index < 0 or player_index >= len(players) or opponent_index < 0 or opponent_index >= len(players):
             return encoded_obs, []
 
         guarded_mask = np.asarray(original_mask).copy()
         interventions: list[GuardrailIntervention] = []
-        for index, option in enumerate(list(getattr(select, "option", None) or [])):
-            if index >= len(guarded_mask) or not guarded_mask[index]:
-                continue
-            attack_id = _as_int(getattr(option, "attackId", None))
-            if attack_id != POWERFUL_HAND_ATTACK_ID:
-                continue
 
-            if protected_by_splashing_dodge:
-                rule = "powerful_hand_blocked_by_splashing_dodge"
-            elif protected_by_mist_energy:
-                rule = "powerful_hand_blocked_by_mist_energy"
-            elif protected_by_rock_fighting_energy:
-                rule = "powerful_hand_blocked_by_rock_fighting_energy"
-            else:
-                rule = "powerful_hand_blocked_by_repelling_veil"
-            guarded_mask[index] = 0
-            interventions.append(
-                GuardrailIntervention(
-                    option_index=index,
-                    rule=rule,
-                    attack_id=attack_id,
-                    target_serial=target_serial,
-                )
-            )
+        for rule in self.rules:
+            rule.apply(self, obs, guarded_mask, interventions, player_index, opponent_index)
 
         if not interventions:
             return encoded_obs, []
@@ -242,6 +741,13 @@ class InferenceGuardrails:
         guarded_obs = dict(encoded_obs)
         guarded_obs["action_mask"] = guarded_mask
         return guarded_obs, interventions
+
+    def evaluate_gameplan(self, env, old_obs, chosen_option) -> float:
+        """Evaluate the chosen option against the deck's gameplan and return a reward modifier."""
+        reward = 0.0
+        for evaluator in self.gameplan_evaluators:
+            reward += evaluator.evaluate(env, old_obs, chosen_option)
+        return reward
 
 
 class SampledSearchGuardrails:

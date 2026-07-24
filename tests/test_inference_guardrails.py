@@ -207,8 +207,166 @@ class InferenceGuardrailTests(unittest.TestCase):
         self.assertEqual([1, 1, 0], guarded["action_mask"].tolist())
         self.assertEqual([], interventions)
 
+    def test_guaranteed_lethal_win_override(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.select.option = [
+            SimpleNamespace(attackId=101, isLethal=False),
+            SimpleNamespace(attackId=102, isLethal=True),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("guaranteed_lethal_win_override", interventions[0].rule)
+
+    def test_prevent_self_ko(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.current.players[0].active[0].hp = 30
+        obs.select.option = [
+            SimpleNamespace(attackId=101, recoilHp=50),
+            SimpleNamespace(attackId=102, recoilHp=0),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("prevent_self_ko", interventions[0].rule)
+
+    def test_empty_deck_search(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.current.players[0].deckCount = 0
+        obs.select.option = [
+            SimpleNamespace(attackId=None, isSearch=True),
+            SimpleNamespace(attackId=102, isSearch=False),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("empty_deck_search", interventions[0].rule)
+
+    def test_wasted_energy_attachment(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.select.option = [
+            SimpleNamespace(attackId=None, isWastedAttach=True),
+            SimpleNamespace(attackId=None, isWastedAttach=False),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("wasted_energy_attachment", interventions[0].rule)
+
+    def test_discard_draw_sequence(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.select.option = [
+            SimpleNamespace(attackId=None, isDiscardDraw=True),
+            SimpleNamespace(attackId=None, isPlayableItem=True),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("discard_draw_sequence", interventions[0].rule)
+
+    def test_bench_clogging_protection(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.current.players[0].bench = [_pokemon(30), _pokemon(31)]
+        obs.current.players[0].maxBench = 3
+        obs.select.option = [
+            SimpleNamespace(attackId=None, isBench=True, isLowPriorityBench=True),
+            SimpleNamespace(attackId=None, isBench=False),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("bench_clogging_protection", interventions[0].rule)
+
+    def test_zero_effect_item_filter(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.current.players[0].discardCount = 0
+        obs.current.players[0].discard = []
+        obs.select.option = [
+            SimpleNamespace(attackId=None, isRecycleItem=True),
+            SimpleNamespace(attackId=102, isRecycleItem=False),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("zero_effect_item_filter", interventions[0].rule)
+
+    def test_prevent_suicidal_deckout(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.current.players[0].deckCount = 3
+        obs.select.option = [
+            SimpleNamespace(attackId=None, isHeavyDraw=True, cardsToDraw=5, isLethal=False),
+            SimpleNamespace(attackId=102, isHeavyDraw=False, cardsToDraw=0, isLethal=False),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("prevent_suicidal_deckout", interventions[0].rule)
+
+    def test_sole_wincon_discard_protection(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.select.option = [
+            SimpleNamespace(attackId=None, isSoleStage2Discard=True),
+            SimpleNamespace(attackId=None, isSoleStage2Discard=False),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("sole_wincon_discard_protection", interventions[0].rule)
+
+    def test_lethal_energy_priority(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20))
+        obs.select.option = [
+            SimpleNamespace(attackId=None, isBenchEnergyAttach=True),
+            SimpleNamespace(attackId=None, isActiveLethalAttach=True),
+        ]
+        encoded = {"action_mask": np.array([1, 1], dtype=np.int8)}
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertEqual([0, 1], guarded["action_mask"].tolist())
+        self.assertEqual(1, len(interventions))
+        self.assertEqual("lethal_energy_priority", interventions[0].rule)
+
 
 class _FixedRng:
+
     def __init__(self, value):
         self.value = value
 
@@ -399,7 +557,14 @@ class InferenceGuardrailStateTests(unittest.TestCase):
         self.assertEqual([], interventions)
 
 
-
+class PokemonTCGEnvGuardrailIntegrationTests(unittest.TestCase):
+    def test_env_guardrails_integration_and_metrics(self):
+        deck = [1] * 60
+        env = PokemonTCGEnv(deck, deck, inference_guardrails=True)
+        self.assertIsNotNone(env.inference_guardrail)
+        metrics = env.get_guardrail_metrics()
+        self.assertIn("total_interventions", metrics)
+        self.assertEqual(metrics["total_interventions"], 0.0)
 
 
 if __name__ == "__main__":
