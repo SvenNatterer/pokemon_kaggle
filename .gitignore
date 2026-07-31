@@ -29,7 +29,9 @@ models/
 
 # Kaggle Dataset
 pokemon-tcg-ai-battle/
+datasets/
 kaggle_bundle/
+
 
 # OS generated files
 .Rhistory
