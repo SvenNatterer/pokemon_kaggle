@@ -17,7 +17,7 @@ def test_initial_manifest_weights_are_unchanged_until_first_segment():
     assert controller.current_probabilities == pytest.approx([0.6, 0.3, 0.1])
 
 
-def test_pfsp_prefers_under_sampled_and_competitive_opponents_with_bounds():
+def test_pfsp_prioritizes_recent_weak_matchups_with_bounds():
     controller = PFSPLite(
         ["competitive", "easy", "hard", "unseen"],
         [1.0, 1.0, 1.0, 1.0],
@@ -32,13 +32,43 @@ def test_pfsp_prefers_under_sampled_and_competitive_opponents_with_bounds():
     probabilities, segment = controller.finish_segment()
     by_label = dict(zip(controller.labels, probabilities))
 
-    assert by_label["unseen"] == pytest.approx(0.45)
+    assert by_label["hard"] > by_label["easy"]
     assert by_label["competitive"] > by_label["easy"]
-    assert by_label["competitive"] > by_label["hard"]
     assert all(probability >= 0.05 for probability in probabilities)
     assert all(probability <= 0.45 for probability in probabilities)
     assert sum(probabilities) == pytest.approx(1.0)
     assert segment["games"] == 300
+
+
+def test_pfsp_gives_the_highest_priority_to_a_recoverable_weak_matchup():
+    controller = PFSPLite(
+        ["recoverable_weakness", "competitive", "easy"],
+        [1.0, 1.0, 1.0],
+        random_fraction=0.20,
+        max_probability=0.70,
+    )
+    for index in range(100):
+        controller.observe("recoverable_weakness", 1 if index < 30 else -1)
+        controller.observe("competitive", 1 if index % 2 == 0 else -1)
+        controller.observe("easy", 1 if index < 95 else -1)
+
+    probabilities, _ = controller.finish_segment()
+    by_label = dict(zip(controller.labels, probabilities))
+
+    assert by_label["recoverable_weakness"] > by_label["competitive"]
+    assert by_label["recoverable_weakness"] > by_label["easy"]
+
+
+def test_pfsp_reports_recent_macro_and_worst_scores_and_effective_opponent_count():
+    controller = PFSPLite(["a", "b"], [1.0, 1.0], max_probability=0.7)
+    controller.observe("a", 1)
+    controller.observe("a", 1)
+    controller.observe("b", -1)
+    controller.observe("b", 0)
+
+    assert controller.recent_macro_win_rate() == pytest.approx(0.625)
+    assert controller.recent_worst_win_rate() == pytest.approx(0.25)
+    assert controller.effective_opponent_count() == pytest.approx(2.0)
 
 
 def test_segment_and_cumulative_results_track_draws_as_half_a_win():
@@ -122,5 +152,3 @@ def test_restore_rejects_a_different_opponent_pool():
 
 def test_environment_weight_update_only_changes_future_sampling_weights():
     from src.env.env_wrapper import PokemonTCGEnv
-
-

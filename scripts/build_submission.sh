@@ -28,7 +28,9 @@ else
   DECK_NUM=$(basename "$MODEL_FILE" .zip | sed -E 's/^ppo(_v4|_v5|_v5b|_v6|_belief)?_deck_//')
 fi
 
-if [[ "$DECK_NUM" == bank_* ]]; then
+if [[ -f "$DECK_NUM" ]]; then
+  DECK_FILE="$DECK_NUM"
+elif [[ "$DECK_NUM" == bank_* || "$DECK_NUM" == deck_* ]]; then
   DECK_FILE="decks/deck_bank/${DECK_NUM}.csv"
 else
   DECK_BASE_NUM=$(echo "$DECK_NUM" | grep -o "^[0-9]*")

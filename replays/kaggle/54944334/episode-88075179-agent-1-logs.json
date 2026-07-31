@@ -1,0 +1,9 @@
+[[{"duration": 14.985016, "stdout": "", "stderr": "/usr/local/lib/python3.11/dist-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'repr' attribute with value False was provided to the `Field()` function, which has no effect in the context it was used. 'repr' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.\n  warnings.warn(\n/usr/local/lib/python3.11/dist-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.\n  warnings.warn(\n"}],
+ [{"duration": 8.262948, "stdout": "", "stderr": "[INFO] LookaheadInferenceAgent initialized successfully for Kaggle submission.\n"}],
+ [{"duration": 0.048572, "stdout": "", "stderr": ""}],
+ [{"duration": 0.054129, "stdout": "", "stderr": ""}],
+ [{"duration": 0.053686, "stdout": "", "stderr": ""}],
+ [{"duration": 0.009221, "stdout": "", "stderr": ""}],
+ [{"duration": 0.060621, "stdout": "", "stderr": ""}],
+ [{"duration": 0.05642, "stdout": "", "stderr": ""}],
+ [{"duration": 0.05879, "stdout": "", "stderr": ""}]]

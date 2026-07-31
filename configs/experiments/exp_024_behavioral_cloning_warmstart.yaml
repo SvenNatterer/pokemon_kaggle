@@ -1,0 +1,34 @@
+# EXP-024: recurrent behavioural-cloning warm start.
+# The dataset is created separately with scripts/collect_lookahead_teacher.py.
+dataset: datasets/exp_024_kaggle_alakazam_500g
+deck: decks/deck_bank/bank_54.csv
+opp_deck: decks/deck_bank/bank_54.csv
+output_model: models/ppo_v6_exp024_bc_warmstart_seed11.zip
+
+epochs: 10
+sequence_length: 64
+learning_rate: 0.0001
+aux_coef: 0.1
+validation_fraction: 0.2
+patience: 3
+seed: 11
+
+# These settings define the saved CustomPPO archive and must match the
+# downstream PPO arm.
+policy_version: v6
+feature_variant: compact
+features_dim: 256
+hidden_dim: 128
+entity_relation_mode: baseline
+card_table: true
+belief_actor: true
+belief_dim: 64
+belief_detach: true
+n_steps: 512
+batch_size: 2048
+n_epochs: 2
+ent_coef: 0.008
+clip_range: 0.12
+target_kl: 0.03
+distill_coef: 0.1
+value_distill_coef: 0.0

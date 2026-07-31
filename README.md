@@ -42,6 +42,38 @@ PYTHONPATH=src venv/bin/python src/train.py \
 workflow is `scripts/train_v5_curriculum_bank18.sh --dry-run` and then the same
 command without `--dry-run`.
 
+## Behavioral-cloning warm start
+
+Collect complete structured-V6 demonstrations first. Pure deterministic expert
+labels are the default; validation and final-holdout opponents are rejected.
+
+```bash
+venv/bin/python scripts/collect_lookahead_teacher.py \
+  --expert rule_based:balanced \
+  --deck decks/deck_bank/bank_38.csv \
+  --opp-deck decks/deck_bank/bank_38.csv \
+  --opp-model rule_based:balanced \
+  --games 1000 \
+  --seed 11 \
+  --out datasets/exp_024_rule_based_v6_seed11
+
+venv/bin/python scripts/train_behavioral_cloning.py \
+  --config configs/experiments/exp_024_behavioral_cloning_warmstart.yaml
+```
+
+The resulting ZIP is a normal `CustomPPO` checkpoint with a fresh PPO optimizer.
+Run the matched scratch and warm-start arms with
+`exp_024_ppo_scratch_seed11.yaml` and `exp_024_ppo_warmstart_seed11.yaml`;
+do not select models on the final holdout.
+
+```bash
+PYTHONPATH=. venv/bin/python src/training/train.py \
+  --config configs/experiments/exp_024_ppo_scratch_seed11.yaml
+
+PYTHONPATH=. venv/bin/python src/training/train.py \
+  --config configs/experiments/exp_024_ppo_warmstart_seed11.yaml
+```
+
 ## Kaggle submission
 
 Build the compressed submission archive locally, then upload that archive

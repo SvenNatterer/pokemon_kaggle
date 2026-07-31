@@ -1,0 +1,32 @@
+# EXP-027: fresh behavioural-cloning warm start for strategic_vector_v2.
+dataset: datasets/exp_027_kaggle_alakazam_strategic_vector_v2_500g
+deck: decks/deck_bank/bank_54.csv
+opp_deck: decks/deck_bank/bank_54.csv
+output_model: models/ppo_v6_exp027_bc_strategic_vector_v2_alakazam_seed11.zip
+
+epochs: 10
+sequence_length: 64
+learning_rate: 0.0001
+aux_coef: 0.0
+validation_fraction: 0.2
+patience: 3
+seed: 11
+
+policy_version: v6
+scalar_obs: true
+feature_variant: strategic_vector_v2
+features_dim: 256
+hidden_dim: 128
+entity_relation_mode: baseline
+card_table: false
+belief_actor: false
+belief_dim: 64
+belief_detach: true
+n_steps: 512
+batch_size: 1024
+n_epochs: 2
+ent_coef: 0.008
+clip_range: 0.12
+target_kl: 0.03
+distill_coef: 0.0
+value_distill_coef: 0.0

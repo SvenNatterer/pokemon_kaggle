@@ -69,15 +69,15 @@
     {
       "action_space_size": 66,
       "archetype": "Alakazam",
-      "deck_id": "bank_14",
-      "deck_path": "decks/deck_bank/bank_14.csv",
-      "feature_variant": "compact",
-      "label": "ppo_v6_compact_c_bank_14",
-      "model_path": "models/validation/v6/ppo_v6_deck_bank_14_compact_c.zip",
-      "policy_family": "compact_c",
+      "deck_id": "bank_54",
+      "deck_path": "decks/deck_bank/bank_54.csv",
+      "feature_variant": "strategic_vector_v3",
+      "label": "ppo_v6_exp028_strategic_vector_v3_alakazam_4m",
+      "model_path": "models/validation/v6/ppo_v6_exp028_strategic_vector_v3_alakazam_4m.zip",
+      "policy_family": "strategic_vector_v3",
       "policy_version": "v6",
-      "reward_variant": "potential",
-      "sha256": "2c7e0832d3938a7da5edc32b45a5e89519ad15589a21479baa1dc52bc948dc00"
+      "reward_variant": "sparse",
+      "sha256": "a32cfc2228d9ca5a1532135381ebe2284c1a686ff2ca95d146e4b0398123beea"
     },
     {
       "action_space_size": 1000,

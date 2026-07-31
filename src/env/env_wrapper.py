@@ -39,6 +39,50 @@ DECK_LIST_SLOTS = 60
 SEARCH_CARD_SLOTS = 60
 LOOKING_CARD_SLOTS = 60
 MAX_HIDDEN_CARD_COUNT = 60
+STRATEGIC_VECTOR_CORE_DIM = 8
+STRATEGIC_VECTOR_PLAYER_SUMMARY_DIM = 20
+STRATEGIC_VECTOR_ZONE_TYPE_DIM = 8
+STRATEGIC_VECTOR_BOARD_COUNT_DIM = 4
+STRATEGIC_VECTOR_CONTEXT_DIM = 8
+STRATEGIC_VECTOR_TACTICAL_DIM = 8
+STRATEGIC_VECTOR_GLOBAL_DIM = (
+    STRATEGIC_VECTOR_CORE_DIM
+    + 2 * STRATEGIC_VECTOR_PLAYER_SUMMARY_DIM
+    + 3 * STRATEGIC_VECTOR_ZONE_TYPE_DIM
+    + 2 * STRATEGIC_VECTOR_BOARD_COUNT_DIM
+    + STRATEGIC_VECTOR_CONTEXT_DIM
+    + STRATEGIC_VECTOR_TACTICAL_DIM
+)
+STRATEGIC_VECTOR_OPTION_DIM = 26
+STRATEGIC_VECTOR_SELECTION_DIM = 10
+STRATEGIC_VECTOR_V1_DIM = (
+    STRATEGIC_VECTOR_GLOBAL_DIM
+    + MAX_ENCODED_OPTIONS * STRATEGIC_VECTOR_OPTION_DIM
+    + STRATEGIC_VECTOR_SELECTION_DIM
+)
+STRATEGIC_VECTOR_V2_TACTICAL_DIM = 10
+STRATEGIC_VECTOR_V2_GLOBAL_DIM = STRATEGIC_VECTOR_GLOBAL_DIM + STRATEGIC_VECTOR_V2_TACTICAL_DIM
+STRATEGIC_VECTOR_V2_DIM = (
+    STRATEGIC_VECTOR_V2_GLOBAL_DIM
+    + MAX_ENCODED_OPTIONS * STRATEGIC_VECTOR_OPTION_DIM
+    + STRATEGIC_VECTOR_SELECTION_DIM
+)
+STRATEGIC_VECTOR_V3_RULE_FEATURE_NAMES = (
+    "draw", "draw_amount", "search_deck", "search_amount", "search_pokemon", "search_trainer", "search_energy",
+    "discard", "discard_amount", "discard_from_hand", "discard_opponent_hand", "discard_energy", "discard_stadium", "discard_tool",
+    "heal", "heal_amount", "damage_counters", "damage_counter_amount", "switch_own", "switch_opponent",
+    "attach_energy", "attach_from_hand", "attach_from_deck", "attach_from_discard", "move_energy", "return_to_hand", "return_to_deck", "recover_from_discard",
+    "poison", "burn", "sleep", "paralyze", "confuse", "bench_effect", "prevent_damage", "prevent_effects",
+    "damage_bonus", "damage_reduction", "retreat_cost_modifier", "cannot_attack", "cannot_retreat", "free_retreat",
+    "prize_more", "prize_fewer", "knock_out_effect", "target_active", "target_bench", "target_any_pokemon",
+)
+STRATEGIC_VECTOR_V3_RULE_FEATURE_DIM = len(STRATEGIC_VECTOR_V3_RULE_FEATURE_NAMES)
+STRATEGIC_VECTOR_V3_OPTION_DIM = STRATEGIC_VECTOR_OPTION_DIM + STRATEGIC_VECTOR_V3_RULE_FEATURE_DIM
+STRATEGIC_VECTOR_V3_DIM = (
+    STRATEGIC_VECTOR_V2_GLOBAL_DIM
+    + MAX_ENCODED_OPTIONS * STRATEGIC_VECTOR_V3_OPTION_DIM
+    + STRATEGIC_VECTOR_SELECTION_DIM
+)
 
 def encode_hidden_card_count(count):
     """Map an absolute hidden-card count to [0, 1] without losing duplicates."""
@@ -57,6 +101,16 @@ def encode_energy_count(count):
     """Map energy count to [0, 1]."""
     clipped = min(10, max(0, int(count)))
     return np.float32(clipped / 10.0)
+
+
+def _bounded_ratio(value, maximum):
+    if maximum <= 0:
+        return 0.0
+    try:
+        numeric = float(value or 0.0)
+    except (TypeError, ValueError):
+        numeric = 0.0
+    return float(min(1.0, max(0.0, numeric / maximum)))
 
 DEFAULT_REWARD_CONFIG = {
     "STEP_PENALTY": 0.0,
@@ -221,44 +275,58 @@ class PokemonTCGEnv(gym.Env):
         rotate_perspective=False,
         action_space_size=V6_ACTION_SPACE_SIZE,
         structured_v2=True,
+        feature_variant="compact",
         zone_aux_targets=False,
         enable_lookahead_teacher=False,
         teacher_sample_rate=0.50,
         inference_guardrails=False,
+        inference_guardrail_mode="active",
         search_guardrail_rate=0.0,
+        lookahead_config=None,
+        enable_archetype_prediction=True,
     ):
         super().__init__()
         self.my_deck = my_deck
         self.opponent_deck = opponent_deck
+        self.feature_variant = str(feature_variant)
+        self.enable_archetype_prediction = bool(enable_archetype_prediction)
         self.enable_inference_guardrails = inference_guardrails
+        self.inference_guardrail_mode = str(inference_guardrail_mode)
         self.search_guardrail_rate = float(search_guardrail_rate)
         self.inference_guardrail = None
         self.search_guardrail = None
         if self.enable_inference_guardrails:
             try:
                 from src.models.inference_guardrails import InferenceGuardrails
-                self.inference_guardrail = InferenceGuardrails(my_deck=self.my_deck)
+                self.inference_guardrail = InferenceGuardrails(
+                    my_deck=self.my_deck,
+                    mode=self.inference_guardrail_mode,
+                )
             except Exception as e:
-                print(f"[WARNING] InferenceGuardrails initialization failed: {e}")
-                self.inference_guardrail = None
+                raise RuntimeError("InferenceGuardrails initialization failed") from e
         if self.search_guardrail_rate > 0.0:
             try:
                 from src.models.inference_guardrails import SampledSearchGuardrails
-                self.search_guardrail = SampledSearchGuardrails(sample_rate=self.search_guardrail_rate)
+                self.search_guardrail = SampledSearchGuardrails(
+                    sample_rate=self.search_guardrail_rate,
+                    mode=self.inference_guardrail_mode,
+                )
             except Exception as e:
-                print(f"[WARNING] SampledSearchGuardrails initialization failed: {e}")
-                self.search_guardrail = None
-        self.guardrail_interventions_count = 0
-        self.guardrail_interventions_by_rule: dict[str, int] = {}
+                raise RuntimeError("SampledSearchGuardrails initialization failed") from e
         self.zone_aux_targets = zone_aux_targets
         self.structured_v2 = structured_v2
         self.enable_lookahead_teacher = enable_lookahead_teacher
         self.teacher_sample_rate = float(teacher_sample_rate)
+        self.lookahead_config = lookahead_config
         self.lookahead_teacher = None
         if self.enable_lookahead_teacher:
             try:
                 from src.training.lookahead_teacher import LookaheadTeacher, LookaheadConfig
-                self.lookahead_teacher = LookaheadTeacher(config=LookaheadConfig(node_budget=96, max_depth=5))
+                if self.lookahead_config and isinstance(self.lookahead_config, dict):
+                    cfg = LookaheadConfig(**self.lookahead_config)
+                else:
+                    cfg = LookaheadConfig(node_budget=96, max_depth=5)
+                self.lookahead_teacher = LookaheadTeacher(config=cfg)
             except Exception:
                 self.lookahead_teacher = None
         self.learner_perspective = learner_perspective
@@ -276,6 +344,7 @@ class PokemonTCGEnv(gym.Env):
         self.opponent_model = None
         self.opponent_model_cache = {}
         self.opponent_pool = list(opponent_pool or [])
+        self.current_opponent_label = None
         self.opponent_lstm_state = None
         self.opponent_episode_start = True
         self.pending_selection = []
@@ -328,6 +397,18 @@ class PokemonTCGEnv(gym.Env):
             self.card_data_by_id = {}
             self.attack_data_by_id = {}
             self.pokemon_attack_costs = {}
+
+        if self.inference_guardrail is not None:
+            self.inference_guardrail.set_card_energy_types({
+                int(card_id): _energy_value(getattr(card, "energyType", -1))
+                for card_id, card in self.card_data_by_id.items()
+            })
+            self.inference_guardrail.set_basic_team_rocket_card_ids({
+                int(card_id)
+                for card_id, card in self.card_data_by_id.items()
+                if bool(getattr(card, "basic", False))
+                and "rocket" in str(getattr(card, "name", "")).casefold()
+            })
         
         # Action space: a discrete selection of an option from the available ones.
         self.action_space = spaces.Discrete(self.max_options)
@@ -335,7 +416,22 @@ class PokemonTCGEnv(gym.Env):
         # Observation V2 keeps the legacy vector for old opponent checkpoints,
         # while exposing categorical cards, structured field entities and legal
         # options to new policies.
-        self.vector_dim = 1500
+        if structured_v2 and self.feature_variant != "compact":
+            raise ValueError(
+                "Structured Observation V2 only supports feature_variant='compact'. "
+                "Use scalar_obs with feature_variant='strategic_vector_v1', 'strategic_vector_v2', or "
+                "'strategic_vector_v3' "
+                "for the isolated vector ablations."
+            )
+        self.vector_dim = (
+            STRATEGIC_VECTOR_V1_DIM
+            if (not structured_v2 and self.feature_variant == "strategic_vector_v1")
+            else STRATEGIC_VECTOR_V2_DIM
+            if (not structured_v2 and self.feature_variant == "strategic_vector_v2")
+            else STRATEGIC_VECTOR_V3_DIM
+            if (not structured_v2 and self.feature_variant == "strategic_vector_v3")
+            else 1500
+        )
         self.aux_dim = 2000
         self.structured_v2 = structured_v2
         
@@ -344,6 +440,7 @@ class PokemonTCGEnv(gym.Env):
             "action_mask": spaces.Box(low=0, high=1, shape=(self.max_options,), dtype=np.int8),
             "aux_target": spaces.Box(low=0, high=1, shape=(self.aux_dim,), dtype=np.float32),
             "teacher_action": spaces.Box(low=-1, high=self.max_options, shape=(1,), dtype=np.int32),
+            "teacher_value": spaces.Box(low=-10000.0, high=10000.0, shape=(1,), dtype=np.float32),
         }
         
         if self.structured_v2:
@@ -499,6 +596,7 @@ class PokemonTCGEnv(gym.Env):
             weights /= weights.sum()
             pool_index = int(self.np_random.choice(len(self.opponent_pool), p=weights))
             opponent = self.opponent_pool[pool_index]
+            self.current_opponent_label = str(opponent.get("label", pool_index))
             self.opponent_deck = list(opponent["deck"])
             self.opponent_model_path = opponent.get("model_path")
             self.opponent_model = None
@@ -536,6 +634,17 @@ class PokemonTCGEnv(gym.Env):
         
         return self._get_obs(perspective=self.learner_perspective), self._get_info()
 
+    def set_opponent_probabilities(self, probabilities):
+        """Update pool weights for future episodes only."""
+        if not self.opponent_pool:
+            return False
+        expected = {str(entry.get("label")) for entry in self.opponent_pool}
+        if set(probabilities) != expected:
+            raise ValueError("PFSP probabilities do not match the opponent pool")
+        for entry in self.opponent_pool:
+            entry["weight"] = float(probabilities[str(entry.get("label"))])
+        return True
+
     def reset_inference_guardrails(self) -> None:
         if self.inference_guardrail is not None:
             self.inference_guardrail.reset()
@@ -543,13 +652,53 @@ class PokemonTCGEnv(gym.Env):
             self.search_guardrail.reset()
 
     def get_guardrail_metrics(self) -> dict[str, Any]:
-        return {
-            "total_interventions": float(self.guardrail_interventions_count),
-            "by_rule": dict(getattr(self, "guardrail_interventions_by_rule", {})),
+        snapshots = []
+        for guardrail in (self.inference_guardrail, self.search_guardrail):
+            if guardrail is not None and hasattr(guardrail, "metrics_snapshot"):
+                snapshots.append(guardrail.metrics_snapshot())
+
+        scalar_keys = (
+            "decisions_total",
+            "proposals_total",
+            "accepted_total",
+            "total_interventions",
+            "rolled_back_total",
+            "shadow_total",
+            "search_failures_total",
+        )
+        merged = {key: 0.0 for key in scalar_keys}
+        known_rules: set[str] = set()
+        by_rule: dict[str, float] = {}
+        proposed_by_rule: dict[str, float] = {}
+        rolled_back_by_rule: dict[str, float] = {}
+        for snapshot in snapshots:
+            for key in scalar_keys:
+                merged[key] += float(snapshot.get(key, 0.0))
+            known_rules.update(str(name) for name in snapshot.get("known_rules", ()))
+            for source_key, target in (
+                ("by_rule", by_rule),
+                ("proposed_by_rule", proposed_by_rule),
+                ("rolled_back_by_rule", rolled_back_by_rule),
+            ):
+                for name, count in snapshot.get(source_key, {}).items():
+                    target[str(name)] = target.get(str(name), 0.0) + float(count)
+
+        merged["known_rules"] = sorted(known_rules)
+        merged["by_rule"] = {
+            name: float(by_rule.get(name, 0.0)) for name in sorted(known_rules)
         }
+        merged["proposed_by_rule"] = {
+            name: float(proposed_by_rule.get(name, 0.0))
+            for name in sorted(known_rules)
+        }
+        merged["rolled_back_by_rule"] = {
+            name: float(rolled_back_by_rule.get(name, 0.0))
+            for name in sorted(known_rules)
+        }
+        return merged
 
     def _update_feature_metrics(self, obs, perspective=0):
-        if obs is None or not getattr(obs, "current", None):
+        if obs is None or not getattr(obs, "current", None) or not getattr(self, "enable_archetype_prediction", True):
             return
         try:
             opp_index = 1 - perspective
@@ -906,6 +1055,429 @@ class PokemonTCGEnv(gym.Env):
 
         remaining_energy = sum(attached_counts.values())
         return missing_specific + max(0, colorless_cost - remaining_energy)
+
+    def _static_card(self, card_like):
+        card_id = _bounded_id(card_like, MAX_CARD_ID)
+        return self.card_data_by_id.get(card_id)
+
+    @staticmethod
+    def _player_pokemon(player):
+        pokemon = []
+        active = list(getattr(player, "active", None) or [])
+        if active and active[0] is not None:
+            pokemon.append(active[0])
+        pokemon.extend(
+            card for card in list(getattr(player, "bench", None) or [])[:5]
+            if card is not None
+        )
+        return pokemon
+
+    @staticmethod
+    def _prize_value(card_data):
+        if card_data is None:
+            return 0.0
+        if bool(getattr(card_data, "megaEx", False)):
+            return 1.0
+        if bool(getattr(card_data, "ex", False)):
+            return 2.0 / 3.0
+        return 1.0 / 3.0
+
+    @staticmethod
+    def _stage_value(card_data):
+        if card_data is None:
+            return 0.0
+        if bool(getattr(card_data, "stage2", False)):
+            return 1.0
+        if bool(getattr(card_data, "stage1", False)):
+            return 2.0 / 3.0
+        if bool(getattr(card_data, "basic", False)):
+            return 1.0 / 3.0
+        return 0.0
+
+    def _zone_type_features(self, cards, *, max_cards):
+        counts = np.zeros(STRATEGIC_VECTOR_ZONE_TYPE_DIM, dtype=np.float32)
+        for card in cards:
+            card_data = self._static_card(card)
+            if card_data is None:
+                continue
+            card_type = _enum_value(getattr(card_data, "cardType", None), CardType, default=-1)
+            if card_type == int(CardType.POKEMON):
+                counts[0] += 1.0
+                if bool(getattr(card_data, "basic", False)):
+                    counts[1] += 1.0
+                if bool(getattr(card_data, "stage1", False) or getattr(card_data, "stage2", False)):
+                    counts[2] += 1.0
+            elif card_type == int(CardType.SUPPORTER):
+                counts[3] += 1.0
+            elif card_type == int(CardType.ITEM):
+                counts[4] += 1.0
+            elif card_type == int(CardType.TOOL):
+                counts[5] += 1.0
+            elif card_type == int(CardType.STADIUM):
+                counts[6] += 1.0
+            elif card_type in {int(CardType.BASIC_ENERGY), int(CardType.SPECIAL_ENERGY)}:
+                counts[7] += 1.0
+        if max_cards <= 0:
+            return counts
+        return np.clip(counts / float(max_cards), 0.0, 1.0)
+
+    def _board_count_features(self, player):
+        counts = np.zeros(STRATEGIC_VECTOR_BOARD_COUNT_DIM, dtype=np.float32)
+        pokemon = self._player_pokemon(player)
+        counts[0] = _bounded_ratio(len(pokemon), 6.0)
+        for card in pokemon:
+            card_data = self._static_card(card)
+            if card_data is None:
+                continue
+            if bool(getattr(card_data, "basic", False)):
+                counts[1] += 1.0
+            if bool(getattr(card_data, "stage1", False) or getattr(card_data, "stage2", False)):
+                counts[2] += 1.0
+            if bool(getattr(card_data, "ex", False) or getattr(card_data, "megaEx", False)):
+                counts[3] += 1.0
+        counts[1:] = np.clip(counts[1:] / 6.0, 0.0, 1.0)
+        return counts
+
+    def _player_summary_features(self, player):
+        features = np.zeros(STRATEGIC_VECTOR_PLAYER_SUMMARY_DIM, dtype=np.float32)
+        pokemon = self._player_pokemon(player)
+        active = list(getattr(player, "active", None) or [])
+        active_card = active[0] if active else None
+        active_static = self._static_card(active_card)
+        attached_energies = list(getattr(active_card, "energies", None) or []) if active_card is not None else []
+        attack_costs = self.pokemon_attack_costs.get(_bounded_id(active_card, MAX_CARD_ID), [])
+        features[0] = _bounded_ratio(getattr(player, "deckCount", 0), 60.0)
+        features[1] = _bounded_ratio(getattr(player, "handCount", len(getattr(player, "hand", None) or [])), 24.0)
+        features[2] = _bounded_ratio(len(getattr(player, "bench", None) or []), 5.0)
+        features[3] = _bounded_ratio(len(getattr(player, "prize", None) or []), 6.0)
+        features[4] = _bounded_ratio(len(getattr(player, "discard", None) or []), 30.0)
+
+        if active_card is not None:
+            hp = float(getattr(active_card, "hp", 0) or 0)
+            max_hp = float(getattr(active_card, "maxHp", 0) or 0)
+            features[5] = _bounded_ratio(hp, 400.0)
+            features[6] = _bounded_ratio(max_hp, 400.0)
+            features[7] = _bounded_ratio(max(0.0, max_hp - hp), 400.0)
+            features[8] = _bounded_ratio(len(attached_energies), 8.0)
+            retreat_cost = int(getattr(active_static, "retreatCost", 0) or 0) if active_static is not None else 0
+            features[9] = _bounded_ratio(retreat_cost, 5.0)
+            features[10] = _bounded_ratio(max(0, retreat_cost - len(attached_energies)), 5.0)
+            for attack_index, attack_cost in enumerate(attack_costs[:2]):
+                deficit = self._attack_deficit(attached_energies, attack_cost)
+                features[11 + attack_index] = _bounded_ratio(deficit, 5.0)
+                features[13 + attack_index] = float(deficit == 0)
+        features[15] = float(bool(getattr(player, "poisoned", False)))
+        features[16] = float(bool(getattr(player, "burned", False)))
+        features[17] = float(bool(getattr(player, "asleep", False)))
+        features[18] = float(bool(getattr(player, "paralyzed", False) or getattr(player, "confused", False)))
+
+        total_board_energy = 0
+        ready_attackers = 0
+        for card in pokemon:
+            attached = list(getattr(card, "energies", None) or [])
+            total_board_energy += len(attached)
+            attack_costs = self.pokemon_attack_costs.get(_bounded_id(card, MAX_CARD_ID), [])
+            if any(self._attack_deficit(attached, cost) == 0 for cost in attack_costs[:2]):
+                ready_attackers += 1
+        features[19] = min(1.0, 0.5 * _bounded_ratio(total_board_energy, 20.0) + 0.5 * _bounded_ratio(ready_attackers, 6.0))
+        return features
+
+    def _best_attack_tactical_features(self, obs, perspective, options):
+        best_damage = 0.0
+        best_prizes = 0.0
+        has_attack_option = 0.0
+        has_ko_attack = 0.0
+        has_attach_option = 0.0
+        has_evolve_option = 0.0
+        for option in options:
+            option_type = _enum_value(getattr(option, "type", None), OptionType)
+            card_id = self._resolve_option_card_id(obs, option, perspective)
+            attack_id = _bounded_id(getattr(option, "attackId", None), MAX_ATTACK_ID)
+            immediate = self._immediate_option_features(obs, option, card_id, attack_id, perspective, options)
+            if option_type == int(OptionType.ATTACK):
+                has_attack_option = 1.0
+                best_damage = max(best_damage, float(immediate[1]))
+                best_prizes = max(best_prizes, float(immediate[4]))
+                has_ko_attack = max(has_ko_attack, float(immediate[3]))
+            elif option_type == int(OptionType.ATTACH):
+                has_attach_option = 1.0
+            elif option_type == int(OptionType.EVOLVE):
+                has_evolve_option = 1.0
+        return np.asarray(
+            [
+                best_damage,
+                best_prizes,
+                has_attack_option,
+                has_ko_attack,
+                has_attach_option,
+                has_evolve_option,
+            ],
+            dtype=np.float32,
+        )
+
+    def _strategic_v2_tactical_features(self, our_player, opponent_player):
+        """Public board facts for resource, prize-trade, and recovery planning."""
+
+        def bench_prize_value(player):
+            return sum(
+                self._prize_value(self._static_card(card))
+                for card in list(getattr(player, "bench", None) or [])
+                if card is not None
+            )
+
+        def fragile_bench_value(player):
+            return sum(
+                self._prize_value(self._static_card(card))
+                for card in list(getattr(player, "bench", None) or [])
+                if card is not None and int(getattr(card, "maxHp", 0) or 0) <= 140
+            )
+
+        def ready_attackers(player, *, bench_only=False):
+            cards = list(getattr(player, "bench", None) or []) if bench_only else self._player_pokemon(player)
+            result = 0
+            for card in cards:
+                attack_costs = self.pokemon_attack_costs.get(_bounded_id(card, MAX_CARD_ID), [])
+                attached = list(getattr(card, "energies", None) or [])
+                if any(self._attack_deficit(attached, cost) == 0 for cost in attack_costs[:2]):
+                    result += 1
+            return result
+
+        our_deck = int(getattr(our_player, "deckCount", 0) or 0)
+        opponent_deck = int(getattr(opponent_player, "deckCount", 0) or 0)
+        own_prizes = len(getattr(our_player, "prize", None) or [])
+        opponent_prizes = len(getattr(opponent_player, "prize", None) or [])
+        return np.asarray(
+            [
+                float(our_deck <= 10),
+                float(our_deck <= 5),
+                float(np.clip((our_deck - opponent_deck) / 60.0, -1.0, 1.0)),
+                float(np.clip((opponent_prizes - own_prizes) / 6.0, -1.0, 1.0)),
+                _bounded_ratio(bench_prize_value(our_player), 5.0),
+                _bounded_ratio(bench_prize_value(opponent_player), 5.0),
+                _bounded_ratio(fragile_bench_value(our_player), 5.0),
+                _bounded_ratio(fragile_bench_value(opponent_player), 5.0),
+                _bounded_ratio(ready_attackers(our_player, bench_only=True), 5.0),
+                _bounded_ratio(ready_attackers(opponent_player), 6.0),
+            ],
+            dtype=np.float32,
+        )
+
+    def _strategic_option_vector(
+        self,
+        obs,
+        option,
+        perspective,
+        options,
+        mask_value,
+        option_index,
+        selected_indices,
+    ):
+        option_type = _enum_value(getattr(option, "type", None), OptionType)
+        option_area = _enum_value(getattr(option, "area", None), AreaType)
+        card_id = self._resolve_option_card_id(obs, option, perspective)
+        attack_id = _bounded_id(getattr(option, "attackId", None), MAX_ATTACK_ID)
+        immediate = self._immediate_option_features(obs, option, card_id, attack_id, perspective, options)
+        card_data = self.card_data_by_id.get(card_id)
+        card_type = _enum_value(getattr(card_data, "cardType", None), CardType, default=-1)
+        option_player = getattr(option, "playerIndex", perspective)
+        try:
+            relative_player = abs(int(option_player) - int(perspective))
+        except (TypeError, ValueError):
+            relative_player = 0
+        is_supporter_play = float(
+            option_type == int(OptionType.PLAY) and card_type == int(CardType.SUPPORTER)
+        )
+        is_pokemon_play = float(
+            option_type == int(OptionType.PLAY) and card_type == int(CardType.POKEMON)
+        )
+        is_energy_attach = float(
+            option_type == int(OptionType.ATTACH)
+            and card_type in {int(CardType.BASIC_ENERGY), int(CardType.SPECIAL_ENERGY)}
+        )
+        features = [
+                float(mask_value),
+                _bounded_ratio(option_type, 16.0),
+                _bounded_ratio(option_area, 12.0),
+                float(relative_player),
+                float(option_index in selected_indices),
+                float(immediate[0]),
+                float(immediate[1]),
+                float(immediate[2]),
+                float(immediate[3]),
+                float(immediate[4]),
+                float(immediate[5]),
+                float(option_type == int(OptionType.ATTACK)),
+                is_supporter_play,
+                is_pokemon_play,
+                is_energy_attach,
+                float(option_type == int(OptionType.EVOLVE)),
+                float(option_type == int(OptionType.ABILITY)),
+                float(option_type == int(OptionType.RETREAT)),
+                float(option_type == int(OptionType.END)),
+                _bounded_ratio(max(0, card_type), 6.0),
+                self._stage_value(card_data),
+                float(bool(getattr(card_data, "ex", False) or getattr(card_data, "megaEx", False))) if card_data is not None else 0.0,
+                _bounded_ratio(getattr(card_data, "hp", 0) if card_data is not None else 0, 400.0),
+                _bounded_ratio(getattr(card_data, "retreatCost", 0) if card_data is not None else 0, 5.0),
+                _bounded_ratio(len(getattr(card_data, "attacks", None) or []) if card_data is not None else 0, 3.0),
+                _bounded_ratio(len(getattr(card_data, "skills", None) or []) if card_data is not None else 0, 3.0),
+            ]
+        if self.feature_variant == "strategic_vector_v3":
+            features.extend(self._strategic_v3_rule_features(obs, card_data, attack_id))
+        return np.asarray(features, dtype=np.float32)
+
+    def _strategic_v3_rule_features(self, obs, card_data, attack_id):
+        """Regex-derived, public card-rule facts for the current legal option.
+
+        These are observable mechanics, not hand-authored action utilities. The
+        parser is shared with the structured card encoder to keep rule meanings
+        consistent across observation contracts.
+        """
+        from src.models.custom_policy import EFFECT_INDEX, _effect_metadata
+
+        values = np.zeros(STRATEGIC_VECTOR_V3_RULE_FEATURE_DIM, dtype=np.float32)
+        texts = []
+        if card_data is not None:
+            texts.extend(str(getattr(skill, "text", "") or "") for skill in getattr(card_data, "skills", None) or [])
+        attack = self.attack_data_by_id.get(attack_id)
+        if attack is not None:
+            texts.append(str(getattr(attack, "text", "") or ""))
+        selection = getattr(obs, "select", None)
+        for source in (
+            getattr(selection, "contextCard", None) if selection is not None else None,
+            getattr(selection, "effect", None) if selection is not None else None,
+        ):
+            source_data = self._static_card(source)
+            if source_data is not None:
+                texts.extend(str(getattr(skill, "text", "") or "") for skill in getattr(source_data, "skills", None) or [])
+        for rule_text in texts:
+            metadata = _effect_metadata(rule_text)
+            values = np.maximum(values, np.asarray([
+                metadata[EFFECT_INDEX[name]] for name in STRATEGIC_VECTOR_V3_RULE_FEATURE_NAMES
+            ], dtype=np.float32))
+        return values.tolist()
+
+    def _strategic_scalar_vector(self, obs, perspective, pending_selection, mask, stop_action):
+        vec = np.zeros((self.vector_dim,), dtype=np.float32)
+        if obs.current is None:
+            vec[-STRATEGIC_VECTOR_SELECTION_DIM] = _bounded_ratio(len(pending_selection), 8.0)
+            vec[-STRATEGIC_VECTOR_SELECTION_DIM + 1] = float(mask[stop_action])
+            for index, selected_option in enumerate(list(pending_selection or [])[:8]):
+                vec[-STRATEGIC_VECTOR_SELECTION_DIM + 2 + index] = _bounded_ratio(selected_option + 1, MAX_ENCODED_OPTIONS)
+            return vec
+
+        state = obs.current
+        our_player = state.players[perspective]
+        opponent_player = state.players[1 - perspective]
+        options = list(getattr(obs.select, "option", None) or [])[:MAX_ENCODED_OPTIONS]
+        selected_indices = set(pending_selection)
+        global_features = []
+        global_features.extend(
+            [
+                _bounded_ratio(state.turn, 30.0),
+                float(state.firstPlayer != perspective),
+                float(state.supporterPlayed),
+                float(state.stadiumPlayed),
+                float(state.energyAttached),
+                float(state.retreated),
+                _bounded_ratio(int(np.count_nonzero(mask[:MAX_ENCODED_OPTIONS])), MAX_ENCODED_OPTIONS),
+                _bounded_ratio(getattr(state, "turnActionCount", 0), 20.0),
+            ]
+        )
+        global_features.extend(self._player_summary_features(our_player))
+        global_features.extend(self._player_summary_features(opponent_player))
+        global_features.extend(self._zone_type_features(list(getattr(our_player, "hand", None) or []), max_cards=24))
+        global_features.extend(self._zone_type_features(list(getattr(our_player, "discard", None) or [])[-30:], max_cards=30))
+        global_features.extend(self._zone_type_features(list(getattr(opponent_player, "discard", None) or [])[-30:], max_cards=30))
+        global_features.extend(self._board_count_features(our_player))
+        global_features.extend(self._board_count_features(opponent_player))
+        searched = list(getattr(obs.select, "deck", None) or [])
+        looking = list(getattr(state, "looking", None) or [])
+        revealed = searched + looking
+        known_our_prizes = sum(
+            1 for card in list(getattr(our_player, "prize", None) or [])[:PRIZE_CARD_SLOTS]
+            if _bounded_id(card, MAX_CARD_ID) > 0
+        )
+        known_opponent_prizes = sum(
+            1 for card in list(getattr(opponent_player, "prize", None) or [])[:PRIZE_CARD_SLOTS]
+            if _bounded_id(card, MAX_CARD_ID) > 0
+        )
+        stadium = list(getattr(state, "stadium", None) or [])
+        context_card = getattr(obs.select, "contextCard", None) if getattr(obs, "select", None) else None
+        effect_card = getattr(obs.select, "effect", None) if getattr(obs, "select", None) else None
+        global_features.extend(
+            [
+                _bounded_ratio(len(searched), SEARCH_CARD_SLOTS),
+                _bounded_ratio(len(looking), LOOKING_CARD_SLOTS),
+                _bounded_ratio(len(revealed), REVEALED_CARD_SLOTS),
+                _bounded_ratio(known_our_prizes, PRIZE_CARD_SLOTS),
+                _bounded_ratio(known_opponent_prizes, PRIZE_CARD_SLOTS),
+                float(_bounded_id(context_card, MAX_CARD_ID) > 0),
+                float(_bounded_id(effect_card, MAX_CARD_ID) > 0),
+                float(bool(stadium and stadium[0] is not None)),
+            ]
+        )
+        tactical = self._best_attack_tactical_features(obs, perspective, options)
+        own_active = (list(getattr(our_player, "active", None) or []) or [None])[0]
+        opponent_active = (list(getattr(opponent_player, "active", None) or []) or [None])[0]
+        own_active_static = self._static_card(own_active)
+        opponent_active_static = self._static_card(opponent_active)
+        global_features.extend(
+            [
+                float(tactical[0]),
+                float(tactical[1]),
+                self._prize_value(own_active_static),
+                self._prize_value(opponent_active_static),
+                float(tactical[2]),
+                float(tactical[3]),
+                float(tactical[4]),
+                float(tactical[5]),
+            ]
+        )
+
+        if self.feature_variant == "strategic_vector_v2":
+            global_features.extend(self._strategic_v2_tactical_features(our_player, opponent_player))
+
+        global_array = np.asarray(global_features, dtype=np.float32)
+        expected_global_dim = (
+            STRATEGIC_VECTOR_V2_GLOBAL_DIM
+            if self.feature_variant == "strategic_vector_v2"
+            else STRATEGIC_VECTOR_GLOBAL_DIM
+        )
+        if global_array.shape[0] != expected_global_dim:
+            raise RuntimeError(
+                f"{self.feature_variant} global feature mismatch: {global_array.shape[0]} != {expected_global_dim}"
+            )
+        vec[:expected_global_dim] = global_array
+
+        option_dim = (
+            STRATEGIC_VECTOR_V3_OPTION_DIM
+            if self.feature_variant == "strategic_vector_v3"
+            else STRATEGIC_VECTOR_OPTION_DIM
+        )
+        option_offset = expected_global_dim
+        for index in range(MAX_ENCODED_OPTIONS):
+            if index < len(options):
+                option_vector = self._strategic_option_vector(
+                    obs,
+                    options[index],
+                    perspective,
+                    options,
+                    mask[index],
+                    index,
+                    selected_indices,
+                )
+            else:
+                option_vector = np.zeros(option_dim, dtype=np.float32)
+            start = option_offset + index * option_dim
+            vec[start:start + option_dim] = option_vector
+
+        selection_offset = expected_global_dim + MAX_ENCODED_OPTIONS * option_dim
+        vec[selection_offset] = _bounded_ratio(len(pending_selection), 8.0)
+        vec[selection_offset + 1] = float(mask[stop_action])
+        for index, selected_option in enumerate(list(pending_selection or [])[:8]):
+            vec[selection_offset + 2 + index] = _bounded_ratio(selected_option + 1, MAX_ENCODED_OPTIONS)
+        return vec
 
     def _resolve_option_card_id(self, obs, option, perspective):
         """Resolve options that only reference ``area + index`` to a card ID."""
@@ -1306,6 +1878,38 @@ class PokemonTCGEnv(gym.Env):
     def _pending_selection_for_perspective(self, perspective=0):
         return self.pending_selection if perspective == self.learner_perspective else self.opponent_pending_selection
 
+    def _apply_guardrails_to_observation(
+        self,
+        obs,
+        encoded_obs: dict[str, Any],
+        *,
+        perspective: int,
+        pending_selection,
+    ) -> dict[str, Any]:
+        """Apply the shared guardrail path to native and Python observations."""
+        # Guardrails belong to the learner/candidate policy. Applying them to
+        # the opponent would change the training distribution and inflate W&B
+        # intervention counts with actions the learner never selected.
+        if int(perspective) != int(self.learner_perspective):
+            return encoded_obs
+        guarded_obs = encoded_obs
+        if self.inference_guardrail is not None:
+            guarded_obs, _ = self.inference_guardrail.apply(
+                obs,
+                guarded_obs,
+                perspective=perspective,
+                pending_selection=pending_selection,
+            )
+        if self.search_guardrail is not None:
+            guarded_obs, _ = self.search_guardrail.apply(
+                obs,
+                guarded_obs,
+                perspective=perspective,
+                rng=random,
+                pending_selection=pending_selection,
+            )
+        return guarded_obs
+
     def _get_obs_cpp(self, perspective=0, pending_selection=None, action_space_size=None, force_structured=None):
         if pending_selection is None:
             pending_selection = self._pending_selection_for_perspective(perspective)
@@ -1430,7 +2034,16 @@ class PokemonTCGEnv(gym.Env):
                 "aux_opponent_prize_ids": aux_opp_prize,
             })
 
+        if self.inference_guardrail is not None or self.search_guardrail is not None:
+            result = self._apply_guardrails_to_observation(
+                obs,
+                result,
+                perspective=perspective,
+                pending_selection=pending_selection,
+            )
+
         teacher_action = -1
+        teacher_value = 0.0
         if self.enable_lookahead_teacher and self.lookahead_teacher is not None and perspective == self.learner_perspective:
             mask = result.get("action_mask", [])
             option_count = int(np.count_nonzero(mask))
@@ -1444,14 +2057,30 @@ class PokemonTCGEnv(gym.Env):
                     decision = self.lookahead_teacher.choose(obs, result, perspective=perspective, hypotheses=hypotheses)
                     if decision is not None:
                         teacher_action = int(decision.action)
+                        teacher_value = float(decision.scores.get(decision.action, 0.0))
                 except Exception:
                     teacher_action = -1
+                    teacher_value = 0.0
 
         self._update_feature_metrics(obs, perspective)
         result["teacher_action"] = np.array([teacher_action], dtype=np.int32)
+        result["teacher_value"] = np.array([teacher_value], dtype=np.float32)
         return result
 
     def _get_obs(self, perspective=0, pending_selection=None, action_space_size=None, force_structured=None):
+        if (
+            self.feature_variant in {"strategic_vector_v1", "strategic_vector_v2", "strategic_vector_v3"}
+            and not self.structured_v2
+            and (force_structured is None or force_structured is False)
+        ):
+            # The ablation vector is assembled from public semantic features in
+            # Python rather than the fixed legacy native 1,500-value buffer.
+            return self._get_obs_python(
+                perspective=perspective,
+                pending_selection=pending_selection,
+                action_space_size=action_space_size,
+                force_structured=force_structured,
+            )
         return self._get_obs_cpp(
             perspective=perspective,
             pending_selection=pending_selection,
@@ -1486,29 +2115,25 @@ class PokemonTCGEnv(gym.Env):
                 mask[stop_action] = 1
 
         if self.inference_guardrail is not None or self.search_guardrail is not None:
-            encoded_obs = {"action_mask": mask}
-            if self.inference_guardrail is not None:
-                encoded_obs, interventions = self.inference_guardrail.apply(
-                    obs, encoded_obs, perspective=perspective, pending_selection=pending_selection
-                )
-                if interventions:
-                    self.guardrail_interventions_count += len(interventions)
-                    for inv in interventions:
-                        rname = getattr(inv, "rule", "unknown")
-                        self.guardrail_interventions_by_rule[rname] = self.guardrail_interventions_by_rule.get(rname, 0) + 1
-            if self.search_guardrail is not None:
-                encoded_obs, interventions = self.search_guardrail.apply(
-                    obs, encoded_obs, perspective=perspective, rng=random, pending_selection=pending_selection
-                )
-                if interventions:
-                    self.guardrail_interventions_count += len(interventions)
-                    for inv in interventions:
-                        rname = getattr(inv, "rule", "search_guardrail")
-                        self.guardrail_interventions_by_rule[rname] = self.guardrail_interventions_by_rule.get(rname, 0) + 1
+            encoded_obs = self._apply_guardrails_to_observation(
+                obs,
+                {"action_mask": mask},
+                perspective=perspective,
+                pending_selection=pending_selection,
+            )
             mask = encoded_obs["action_mask"]
             
-        vec = np.zeros((self.vector_dim,), dtype=np.float32)
-        if obs.current is not None:
+        if self.feature_variant in {"strategic_vector_v1", "strategic_vector_v2", "strategic_vector_v3"}:
+            vec = self._strategic_scalar_vector(
+                obs,
+                perspective,
+                pending_selection,
+                mask,
+                stop_action,
+            )
+        else:
+            vec = np.zeros((self.vector_dim,), dtype=np.float32)
+        if obs.current is not None and self.feature_variant not in {"strategic_vector_v1", "strategic_vector_v2", "strategic_vector_v3"}:
             state = obs.current
             # Continuous & Boolean Stats (0-299)
             vec[0] = state.turn
@@ -1751,20 +2376,26 @@ class PokemonTCGEnv(gym.Env):
             res = {"vector": vec, "action_mask": mask, "aux_target": aux_target}
 
         teacher_action = -1
-        if self.enable_lookahead_teacher and self.lookahead_teacher is not None:
-            if random.random() < self.teacher_sample_rate:
-                option_count = int(np.count_nonzero(mask))
-                if option_count >= 2:
-                    try:
-                        from src.training.lookahead_teacher import build_search_hypotheses
-                        hypotheses = build_search_hypotheses(obs, perspective, card_data_by_id=self.lookahead_teacher.card_data_by_id)
-                        decision = self.lookahead_teacher.choose(obs, res, perspective=perspective, hypotheses=hypotheses)
-                        if decision is not None:
-                            teacher_action = int(decision.action)
-                    except Exception:
-                        teacher_action = -1
+        teacher_value = 0.0
+        if self.enable_lookahead_teacher and self.lookahead_teacher is not None and perspective == self.learner_perspective:
+            mask = res.get("action_mask", [])
+            option_count = int(np.count_nonzero(mask))
+            if random.random() < self.teacher_sample_rate and option_count >= 2:
+                try:
+                    from src.training.lookahead_teacher import build_search_hypotheses
+                    your_d = self.my_deck if perspective == self.learner_perspective else self.opponent_deck
+                    opp_d = self.opponent_deck if perspective == self.learner_perspective else self.my_deck
+                    hypotheses = build_search_hypotheses(obs, your_deck=your_d, opponent_deck=opp_d, card_data_by_id=self.lookahead_teacher.card_data_by_id)
+                    decision = self.lookahead_teacher.choose(obs, res, perspective=perspective, hypotheses=hypotheses)
+                    if decision is not None:
+                        teacher_action = int(decision.action)
+                        teacher_value = float(decision.scores.get(decision.action, 0.0))
+                except Exception:
+                    teacher_action = -1
+                    teacher_value = 0.0
 
         res["teacher_action"] = np.array([teacher_action], dtype=np.int32)
+        res["teacher_value"] = np.array([teacher_value], dtype=np.float32)
 
         if self.zone_aux_targets and not use_structured:
             res.update({
@@ -1780,9 +2411,11 @@ class PokemonTCGEnv(gym.Env):
         info = {
             "policy_version": self.policy_version,
             "action_space_size": self.max_options,
+            "learner_perspective": self.learner_perspective,
             "max_option_count_seen": self.max_option_count_seen,
             "option_overflow_count": self.option_overflow_count,
             "engine_error_count": self.engine_error_count,
+            "opponent_label": self.current_opponent_label,
         }
         try:
             obs = to_observation_class(self.current_obs_dict)

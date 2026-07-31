@@ -1,0 +1,15 @@
+[
+  {"label": "Mega Abomasnow ex rule-based balanced", "deck": "decks/deck_bank/deck_abomasnow_ex.csv", "model": "rule_based:balanced", "weight": 0.5},
+  {"label": "Dragapult ex rule-based balanced", "deck": "decks/deck_bank/bank_10.csv", "model": "rule_based:balanced", "weight": 0.5},
+  {"label": "V6 Training · Hop's Trevenant (bank_33)", "deck": "decks/deck_bank/bank_33.csv", "model": "models/training_v6/ppo_v6_deck_bank_33_compact_c.zip", "weight": 1.0},
+  {"label": "EXP-014 2M Champion (Attention + Guardrails)", "deck": "decks/deck_bank/bank_38.csv", "model": "models/ppo_v6_exp014_2m_inference_gameplan.zip", "weight": 2.0},
+  {"label": "V6 Training · Team Rocket's Mewtwo ex (bank_38)", "deck": "decks/deck_bank/bank_38.csv", "model": "models/training_v6/ppo_v6_deck_bank_38_compact_a.zip", "weight": 1.0},
+  {"label": "V6 Training · Haxorus (bank_61)", "deck": "decks/deck_bank/bank_61.csv", "model": "models/training_v6/ppo_v6_deck_bank_61_compact_c.zip", "weight": 1.0},
+  {"label": "Kaggle · Alakazam V8", "deck": "decks/kaggle_bots/deck_kaggle_alakazam_v8.csv", "model": "src/agents/kaggle_bots/alakazam_v8_agent.py", "weight": 1.0},
+  {"label": "Kaggle · Battlecore Archaludon", "deck": "decks/kaggle_bots/deck_kaggle_battlecore.csv", "model": "src/agents/kaggle_bots/battlecore_agent.py", "weight": 1.0},
+  {"label": "Kaggle · Conservative Probabilistic", "deck": "decks/kaggle_bots/deck_kaggle_conservative_probabilistic.csv", "model": "src/agents/kaggle_bots/conservative_probabilistic_agent.py", "weight": 1.0},
+  {"label": "Kaggle · Dragapult ex", "deck": "decks/kaggle_bots/deck_kaggle_dragapult.csv", "model": "src/agents/kaggle_bots/dragapult_agent.py", "weight": 1.0},
+  {"label": "Kaggle · Iono N's Zoroark ex", "deck": "decks/kaggle_bots/deck_kaggle_iono_zoroark.csv", "model": "src/agents/kaggle_bots/iono_zoroark_agent.py", "weight": 1.0},
+  {"label": "Kaggle · Mega Abomasnow", "deck": "decks/kaggle_bots/deck_kaggle_mega_abomasnow.csv", "model": "src/agents/kaggle_bots/mega_abomasnow_agent.py", "weight": 1.0},
+  {"label": "Kaggle · Mega Lucario ex", "deck": "decks/kaggle_bots/deck_kaggle_mega_lucario.csv", "model": "src/agents/kaggle_bots/mega_lucario_agent.py", "weight": 1.0}
+]

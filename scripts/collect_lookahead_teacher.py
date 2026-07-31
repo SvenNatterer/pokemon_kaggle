@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Collect bounded look-ahead labels on states visited by an existing bot."""
+"""Collect complete V6 expert trajectories, optionally relabelled by lookahead."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
+from typing import Any
 
 import numpy as np
 
@@ -16,40 +16,48 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agents.bot_loader import load_bot
+from src.agents.rule_based_agent import RuleBasedPokemonAgent
 from src.cg.api import to_observation_class
+from src.data.demonstrations import (
+    ACTION_SPACE_SIZE,
+    DemonstrationDatasetWriter,
+    read_deck,
+    sha256_file,
+    validate_legal_action,
+)
 from src.env.env_wrapper import (
-    LEGACY_ACTION_SPACE_SIZE,
+    V6_ACTION_SPACE_SIZE,
     PokemonTCGEnv,
     _fit_observation_to_model_space,
 )
 from src.training.lookahead_teacher import (
     LookaheadConfig,
     LookaheadTeacher,
+    TeacherDecision,
     build_search_hypotheses,
+)
+from src.league.experiment_registry import git_revision
+from src.utils import resolve_deck_path, resolve_pool_path
+
+
+DEFAULT_RESERVED_MANIFESTS = (
+    "decks/pools/holdout_opponents.json",
+    "decks/pools/validation_opponents.json",
 )
 
 
-def read_deck(path: str) -> list[int]:
-    cards: list[int] = []
-    with open(path, "r", encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, start=1):
-            value = line.strip().split(",", 1)[0]
-            if not value:
-                continue
-            try:
-                cards.append(int(value))
-            except ValueError as error:
-                raise ValueError(f"Invalid card ID at {path}:{line_number}") from error
-    if len(cards) != 60:
-        raise ValueError(f"Deck must contain 60 cards, got {len(cards)}: {path}")
-    return cards
-
-
-def _scalar_action(action) -> int:
+def _scalar_action(action: Any) -> int:
     return int(np.asarray(action).reshape(-1)[0])
 
 
-def _is_interesting(raw_observation, encoded_observation, *, all_decisions: bool) -> bool:
+def _teacher_candidate(
+    raw_observation: Any,
+    encoded_observation: dict[str, np.ndarray],
+    *,
+    all_decisions: bool,
+) -> bool:
+    """Keep lookahead's supported root restriction without dropping trajectory steps."""
+
     select = getattr(raw_observation, "select", None)
     current = getattr(raw_observation, "current", None)
     if select is None or current is None:
@@ -57,7 +65,9 @@ def _is_interesting(raw_observation, encoded_observation, *, all_decisions: bool
     if int(getattr(select, "minCount", -1)) != 1 or int(getattr(select, "maxCount", -1)) != 1:
         return False
     option_count = len(getattr(select, "option", None) or [])
-    legal_count = int(np.count_nonzero(np.asarray(encoded_observation["action_mask"])[:option_count]))
+    legal_count = int(
+        np.count_nonzero(np.asarray(encoded_observation["action_mask"])[:option_count])
+    )
     if legal_count < 2:
         return False
     if all_decisions:
@@ -66,212 +76,391 @@ def _is_interesting(raw_observation, encoded_observation, *, all_decisions: bool
     return len(players) == 2 and min(len(players[0].prize), len(players[1].prize)) <= 3
 
 
-def _append_sample(
-    samples: dict[str, list[np.ndarray]],
-    observation: dict[str, np.ndarray],
-    *,
-    teacher_action: int,
-    teacher_scores: dict[int, float],
-    confidence: float,
-    student_action: int,
-    episode: int,
-    step: int,
-    perspective: int,
-) -> None:
-    for key, value in observation.items():
-        # aux_target is a training target for a different task and is not an
-        # actor-visible feature needed by behaviour cloning.
-        if key != "aux_target":
-            samples.setdefault(f"obs__{key}", []).append(np.asarray(value).copy())
-
-    action_count = len(np.asarray(observation["action_mask"]))
-    q_values = np.full(action_count, np.nan, dtype=np.float32)
-    for action, score in teacher_scores.items():
-        if 0 <= action < action_count:
-            q_values[action] = float(score)
-    samples.setdefault("teacher_q", []).append(q_values)
-    samples.setdefault("teacher_action", []).append(np.asarray(teacher_action, dtype=np.int64))
-    samples.setdefault("teacher_confidence", []).append(np.asarray(confidence, dtype=np.float32))
-    samples.setdefault("student_action", []).append(np.asarray(student_action, dtype=np.int64))
-    samples.setdefault("episode", []).append(np.asarray(episode, dtype=np.int32))
-    samples.setdefault("step", []).append(np.asarray(step, dtype=np.int32))
-    samples.setdefault("perspective", []).append(np.asarray(perspective, dtype=np.int8))
+def _teacher_q(decision: TeacherDecision) -> np.ndarray:
+    values = np.full(ACTION_SPACE_SIZE, np.nan, dtype=np.float32)
+    for action, score in decision.scores.items():
+        if 0 <= int(action) < ACTION_SPACE_SIZE:
+            values[int(action)] = float(score)
+    return values
 
 
-def _save_dataset(path: str, samples: dict[str, list[np.ndarray]], metadata: dict) -> None:
-    output = Path(path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    arrays = {
-        key: np.stack(values)
-        for key, values in samples.items()
-        if values
-    }
-    arrays["metadata_json"] = np.asarray(json.dumps(metadata, sort_keys=True))
-    temporary = output.with_name(f"{output.name}.tmp-{os.getpid()}.npz")
-    np.savez_compressed(temporary, **arrays)
-    os.replace(temporary, output)
+def _validate_expert(expert: Any, model_spec: str) -> None:
+    """Rule bots and Kaggle script agents are V6 adapters; neural experts must declare 66 actions."""
 
+    from src.agents.kaggle_bots.wrapper import KagglePythonAgentWrapper
 
-def collect(args) -> dict:
-    rng = np.random.default_rng(args.seed)
-    deck = read_deck(args.deck)
-    opponent_deck = read_deck(args.opp_deck)
-    model = load_bot(args.model)
-    model_space = getattr(model, "observation_space", None)
-    action_space_size = int(
-        getattr(getattr(model, "action_space", None), "n", LEGACY_ACTION_SPACE_SIZE)
-    )
-    if action_space_size not in {LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE}:
-        raise ValueError(f"Unsupported model action space: {action_space_size}")
-    structured_v2 = bool(
-        model_space is not None
-        and hasattr(model_space, "spaces")
-        and "entity_ids" in model_space.spaces
-    )
-
-    teacher = LookaheadTeacher(
-        LookaheadConfig(
-            max_depth=args.depth,
-            beam_width=args.beam_width,
-            node_budget=args.node_budget,
-            max_combinations=args.max_combinations,
+    if isinstance(expert, (RuleBasedPokemonAgent, KagglePythonAgentWrapper)):
+        return
+    action_space = getattr(expert, "action_space", None)
+    action_count = getattr(action_space, "n", None)
+    if action_count is None:
+        raise ValueError(
+            f"Expert {model_spec!r} does not declare a V6 action space; "
+            "use a V6 PPO checkpoint, rule_based:* expert, or python_script:* expert"
         )
-    )
-    samples: dict[str, list[np.ndarray]] = {}
-    queried = 0
-    labelled = 0
-    overridden = 0
-    search_failures = 0
-    completed_games = 0
+    if int(action_count) != V6_ACTION_SPACE_SIZE:
+        raise ValueError(
+            f"Non-V6 neural expert has {action_count} actions; expected {V6_ACTION_SPACE_SIZE}"
+        )
 
+
+def _check_reserved_data(args: argparse.Namespace) -> list[str]:
+    """Fail closed if either deck/model overlaps validation or final holdout."""
+
+    from scripts.check_holdout_safe import check_paths
+
+    checked: list[str] = []
+    for manifest in dict.fromkeys(args.reserved_opponents):
+        resolved = resolve_pool_path(manifest)
+        if not resolved.is_file():
+            raise FileNotFoundError(f"Reserved-opponent manifest does not exist: {manifest}")
+        check_paths(
+            str(resolved),
+            [str(resolve_deck_path(args.deck)), str(resolve_deck_path(args.opp_deck))],
+            [value for value in (args.model, args.opp_model) if value],
+            [],
+        )
+        checked.append(str(resolved))
+    return checked
+
+
+def _outcome(info: dict[str, Any], perspective: int) -> int:
+    winner = info.get("winner", -1)
+    try:
+        winner = int(winner)
+    except (TypeError, ValueError):
+        return 0
+    if winner == int(perspective):
+        return 1
+    if winner in (0, 1):
+        return -1
+    return 0
+
+
+def _resolved_file(value: str | None) -> Path | None:
+    if not value:
+        return None
+    path = Path(value)
+    return path.resolve() if path.is_file() else None
+
+
+def _teacher_decision(
+    args: argparse.Namespace,
+    *,
+    teacher: LookaheadTeacher | None,
+    rng: np.random.Generator,
+    env: PokemonTCGEnv,
+    observation: dict[str, np.ndarray],
+    deck: list[int],
+    opponent_deck: list[int],
+) -> tuple[TeacherDecision | None, bool]:
+    if teacher is None or float(rng.random()) >= args.lookahead_sample_rate:
+        return None, False
+    raw_observation = to_observation_class(env.current_obs_dict)
+    if not _teacher_candidate(
+        raw_observation,
+        observation,
+        all_decisions=args.all_decisions,
+    ):
+        return None, False
+    hypotheses = build_search_hypotheses(
+        raw_observation,
+        your_deck=deck,
+        opponent_deck=opponent_deck,
+        count=args.hypotheses,
+        rng=rng,
+        card_data_by_id=env.card_data_by_id,
+    )
+    decision = teacher.choose(
+        raw_observation,
+        observation,
+        perspective=env.learner_perspective,
+        hypotheses=hypotheses,
+    )
+    if decision is None or decision.confidence < args.min_confidence:
+        return None, True
+    validate_legal_action(observation, decision.action)
+    return decision, True
+
+
+def collect(args: argparse.Namespace) -> dict[str, Any]:
+    if V6_ACTION_SPACE_SIZE != ACTION_SPACE_SIZE:
+        raise RuntimeError("Demonstration schema and environment V6 action spaces disagree")
+
+    reserved = _check_reserved_data(args)
+    deck_path = resolve_deck_path(args.deck).resolve()
+    opponent_deck_path = resolve_deck_path(args.opp_deck).resolve()
+    expert_path = _resolved_file(args.model)
+    opponent_model_path = _resolved_file(args.opp_model)
+    deck = read_deck(deck_path)
+    opponent_deck = read_deck(opponent_deck_path)
+    expert = load_bot(args.model)
+    _validate_expert(expert, args.model)
+    expert_space = getattr(expert, "observation_space", None)
+    rng = np.random.default_rng(args.seed)
+
+    teacher = None
+    if args.lookahead_sample_rate > 0.0:
+        teacher = LookaheadTeacher(
+            LookaheadConfig(
+                max_depth=args.depth,
+                beam_width=args.beam_width,
+                node_budget=args.node_budget,
+                max_combinations=args.max_combinations,
+            )
+        )
+
+    collection_metadata = {
+        "collector": "scripts/collect_lookahead_teacher.py",
+        "git_revision": git_revision(),
+        "expert_spec": args.model,
+        "expert_path": str(expert_path) if expert_path is not None else None,
+        "expert_sha256": sha256_file(expert_path) if expert_path is not None else None,
+        "deck_path": str(deck_path),
+        "deck_sha256": sha256_file(deck_path),
+        "opponent_model_spec": args.opp_model,
+        "opponent_model_path": (
+            str(opponent_model_path) if opponent_model_path is not None else None
+        ),
+        "opponent_model_sha256": (
+            sha256_file(opponent_model_path) if opponent_model_path is not None else None
+        ),
+        "opponent_deck_path": str(opponent_deck_path),
+        "opponent_deck_sha256": sha256_file(opponent_deck_path),
+        "seed": args.seed,
+        "rotate_perspective": bool(args.rotate_perspective),
+        "scalar_obs": bool(args.scalar_obs),
+        "feature_variant": args.feature_variant,
+        "inference_guardrails": bool(args.inference_guardrails),
+        "inference_guardrail_mode": args.inference_guardrail_mode,
+        "reserved_opponent_manifests": reserved,
+        "lookahead_sample_rate": args.lookahead_sample_rate,
+        "lookahead_relabel": bool(args.lookahead_relabel),
+        "teacher_control": bool(args.teacher_control),
+    }
+    counters = {
+        "requested_games": int(args.games),
+        "completed_games": 0,
+        "discarded_games": 0,
+        "decision_samples": 0,
+        "branching_decisions": 0,
+        "stop_available_states": 0,
+        "stop_labels": 0,
+        "lookahead_queries": 0,
+        "lookahead_labels": 0,
+        "lookahead_counterfactual_labels": 0,
+        "teacher_overrides": 0,
+        "search_failures": 0,
+    }
     env = PokemonTCGEnv(
         my_deck=deck,
         opponent_deck=opponent_deck,
         opponent_model_path=args.opp_model,
         rotate_perspective=args.rotate_perspective,
-        action_space_size=action_space_size,
-        structured_v2=structured_v2,
-        inference_guardrails=False,
+        action_space_size=V6_ACTION_SPACE_SIZE,
+        structured_v2=not args.scalar_obs,
+        feature_variant=args.feature_variant,
+        zone_aux_targets=False,
+        enable_lookahead_teacher=False,
+        inference_guardrails=args.inference_guardrails,
+        inference_guardrail_mode=args.inference_guardrail_mode,
+        search_guardrail_rate=args.search_guardrail_rate,
     )
+    writer = DemonstrationDatasetWriter(args.out, metadata=collection_metadata)
     try:
-        for episode in range(args.games):
-            observation, _ = env.reset(seed=args.seed + episode)
+        for source_episode in range(args.games):
+            observation, _ = env.reset(seed=args.seed + source_episode)
+            writer.start_episode(perspective=env.learner_perspective)
             lstm_state = None
             episode_start = np.ones((1,), dtype=bool)
             terminated = truncated = False
+            info: dict[str, Any] = {}
 
-            for step in range(args.max_steps):
-                observation_for_model = (
-                    _fit_observation_to_model_space(observation, model_space)
-                    if model_space is not None
-                    else observation
+            episode_samples = 0
+            episode_counters = {
+                key: 0
+                for key in (
+                    "branching_decisions",
+                    "stop_available_states",
+                    "stop_labels",
+                    "lookahead_queries",
+                    "lookahead_labels",
+                    "lookahead_counterfactual_labels",
+                    "teacher_overrides",
+                    "search_failures",
                 )
-                action, lstm_state = model.predict(
-                    observation_for_model,
-                    state=lstm_state,
-                    episode_start=episode_start,
-                    deterministic=True,
-                )
-                episode_start[:] = False
-                student_action = _scalar_action(action)
-                action_to_play = student_action
+            }
+            try:
+                for _ in range(args.max_steps):
+                    expert_observation = (
+                        _fit_observation_to_model_space(observation, expert_space)
+                        if expert_space is not None
+                        else observation
+                    )
+                    if hasattr(env, "current_obs_dict") and env.current_obs_dict is not None:
+                        if isinstance(expert_observation, dict):
+                            expert_observation = dict(expert_observation)
+                            expert_observation["raw_obs"] = env.current_obs_dict
 
-                raw_observation = to_observation_class(env.current_obs_dict)
-                if (
-                    _is_interesting(
-                        raw_observation,
-                        observation,
-                        all_decisions=args.all_decisions,
+                    proposed_action, lstm_state = expert.predict(
+                        expert_observation,
+                        state=lstm_state,
+                        episode_start=episode_start,
+                        deterministic=not args.stochastic_expert,
                     )
-                    and float(rng.random()) < args.sample_rate
-                ):
-                    queried += 1
-                    hypotheses = build_search_hypotheses(
-                        raw_observation,
-                        your_deck=deck,
-                        opponent_deck=opponent_deck,
-                        count=args.hypotheses,
-                        rng=rng,
-                        card_data_by_id=env.card_data_by_id,
-                    )
-                    decision = teacher.choose(
-                        raw_observation,
-                        observation,
-                        perspective=env.learner_perspective,
-                        hypotheses=hypotheses,
-                    )
-                    if teacher.last_error is not None:
-                        search_failures += 1
-                    if decision is not None and decision.confidence >= args.min_confidence:
-                        labelled += 1
-                        _append_sample(
-                            samples,
-                            observation_for_model,
-                            teacher_action=decision.action,
-                            teacher_scores=decision.scores,
-                            confidence=decision.confidence,
-                            student_action=student_action,
-                            episode=episode,
-                            step=step,
-                            perspective=env.learner_perspective,
+                    episode_start[:] = False
+                    expert_action = _scalar_action(proposed_action)
+                    validate_legal_action(observation, expert_action)
+
+                    decision = None
+                    if teacher is not None:
+                        teacher.last_error = None
+                        decision, queried = _teacher_decision(
+                            args,
+                            teacher=teacher,
+                            rng=rng,
+                            env=env,
+                            observation=observation,
+                            deck=deck,
+                            opponent_deck=opponent_deck,
                         )
-                        if args.teacher_control and decision.action != student_action:
-                            action_to_play = decision.action
-                            overridden += 1
+                        if queried:
+                            episode_counters["lookahead_queries"] += 1
+                        if teacher.last_error is not None:
+                            episode_counters["search_failures"] += 1
 
-                observation, _, terminated, truncated, _ = env.step(action_to_play)
-                if terminated or truncated:
-                    completed_games += int(terminated)
-                    break
+                    use_teacher_label = decision is not None and (
+                        args.lookahead_relabel or args.teacher_control
+                    )
+                    label_action = decision.action if use_teacher_label else expert_action
+                    action_to_play = (
+                        decision.action
+                        if decision is not None and args.teacher_control
+                        else expert_action
+                    )
+                    if use_teacher_label:
+                        episode_counters["lookahead_labels"] += 1
+                        if label_action != action_to_play:
+                            episode_counters["lookahead_counterfactual_labels"] += 1
+                    if action_to_play != expert_action:
+                        episode_counters["teacher_overrides"] += 1
+
+                    legal_count = validate_legal_action(observation, label_action)
+                    if legal_count >= 2:
+                        episode_counters["branching_decisions"] += 1
+                    if bool(np.asarray(observation["action_mask"])[V6_ACTION_SPACE_SIZE - 1]):
+                        episode_counters["stop_available_states"] += 1
+                    if label_action == V6_ACTION_SPACE_SIZE - 1:
+                        episode_counters["stop_labels"] += 1
+
+                    writer.append(
+                        observation,
+                        action=label_action,
+                        label_source=(
+                            "lookahead_counterfactual"
+                            if use_teacher_label and label_action != action_to_play
+                            else "lookahead"
+                            if use_teacher_label
+                            else "expert"
+                        ),
+                        teacher_confidence=(decision.confidence if decision is not None else 0.0),
+                        teacher_q=(_teacher_q(decision) if decision is not None else None),
+                    )
+                    episode_samples += 1
+                    observation, _, terminated, truncated, info = env.step(action_to_play)
+                    if terminated or truncated:
+                        break
+
+                if terminated and not truncated:
+                    writer.commit_episode(
+                        outcome=_outcome(info, env.learner_perspective)
+                    )
+                    counters["completed_games"] += 1
+                    counters["decision_samples"] += episode_samples
+                    for key, value in episode_counters.items():
+                        counters[key] += value
+                else:
+                    writer.discard_episode()
+                    counters["discarded_games"] += 1
+            except Exception:
+                writer.discard_episode()
+                raise
     finally:
         env.close()
 
-    metadata = {
-        "schema_version": 1,
-        "model": args.model,
-        "deck": args.deck,
-        "opponent_model": args.opp_model,
-        "opponent_deck": args.opp_deck,
-        "games": args.games,
-        "completed_games": completed_games,
-        "queried_states": queried,
-        "labelled_states": labelled,
-        "teacher_overrides": overridden,
-        "search_failures": search_failures,
-        "teacher_control": bool(args.teacher_control),
-        "depth": args.depth,
-        "beam_width": args.beam_width,
-        "node_budget": args.node_budget,
-        "hypotheses": args.hypotheses,
-        "seed": args.seed,
-    }
-    _save_dataset(args.out, samples, metadata)
-    return metadata
+    writer.update_metadata(counters)
+    return {**counters, "output": str(Path(args.out) / "manifest.json")}
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Collect look-ahead teacher labels from states visited by a PPO bot.",
+        description=(
+            "Collect complete structured-V6 expert trajectories with optional "
+            "lookahead labels."
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--model",
+        "--expert",
+        dest="model",
+        required=True,
+        help="V6 PPO or rule_based:* expert",
+    )
     parser.add_argument("--deck", required=True)
     parser.add_argument("--opp-deck", required=True)
     parser.add_argument("--opp-model", default=None)
-    parser.add_argument("--out", required=True)
-    parser.add_argument("--games", type=int, default=1)
+    parser.add_argument("--scalar-obs", action="store_true")
+    parser.add_argument(
+        "--feature-variant",
+        choices=("compact", "strategic_vector_v1", "strategic_vector_v2", "strategic_vector_v3"),
+        default="compact",
+    )
+    parser.add_argument("--out", required=True, help="New dataset output directory")
+    parser.add_argument("--games", type=int, default=2)
     parser.add_argument("--max-steps", type=int, default=500)
-    parser.add_argument("--sample-rate", type=float, default=0.10)
+    parser.add_argument(
+        "--sample-rate",
+        "--lookahead-sample-rate",
+        dest="lookahead_sample_rate",
+        type=float,
+        default=0.0,
+        help="Fraction of supported states queried from lookahead",
+    )
+    parser.add_argument("--no-lookahead", dest="lookahead_sample_rate", action="store_const", const=0.0)
     parser.add_argument("--hypotheses", type=int, default=4)
     parser.add_argument("--depth", type=int, default=5)
     parser.add_argument("--beam-width", type=int, default=3)
     parser.add_argument("--node-budget", type=int, default=96)
     parser.add_argument("--max-combinations", type=int, default=16)
     parser.add_argument("--min-confidence", type=float, default=1.0)
-    parser.add_argument("--seed", type=int, default=20260721)
     parser.add_argument("--all-decisions", action="store_true")
+    parser.add_argument("--lookahead-relabel", action="store_true")
     parser.add_argument("--teacher-control", action="store_true")
-    parser.add_argument("--rotate-perspective", action="store_true")
+    parser.add_argument("--stochastic-expert", action="store_true")
+    parser.add_argument("--seed", type=int, default=20260721)
+    parser.add_argument("--rotate-perspective", dest="rotate_perspective", action="store_true")
+    parser.add_argument(
+        "--no-rotate-perspective",
+        "--fixed-perspective",
+        dest="rotate_perspective",
+        action="store_false",
+    )
+    parser.add_argument("--inference-guardrails", dest="inference_guardrails", action="store_true")
+    parser.add_argument("--no-inference-guardrails", dest="inference_guardrails", action="store_false")
+    parser.add_argument(
+        "--inference-guardrail-mode",
+        choices=("active", "shadow"),
+        default="active",
+    )
+    parser.add_argument("--search-guardrail-rate", type=float, default=0.0)
+    parser.add_argument(
+        "--reserved-opponents",
+        action="append",
+        default=list(DEFAULT_RESERVED_MANIFESTS),
+        help="Validation/final-holdout manifest that collection must not overlap",
+    )
+    parser.set_defaults(rotate_perspective=True, inference_guardrails=True)
     return parser
 
 
@@ -279,10 +468,18 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.games < 1 or args.max_steps < 1:
         raise ValueError("games and max-steps must be positive")
-    if not 0.0 <= args.sample_rate <= 1.0:
-        raise ValueError("sample-rate must be between 0 and 1")
-    metadata = collect(args)
-    print(json.dumps(metadata, indent=2, sort_keys=True))
+    if not 0.0 <= args.lookahead_sample_rate <= 1.0:
+        raise ValueError("lookahead sample rate must be between 0 and 1")
+    if args.hypotheses < 1:
+        raise ValueError("hypotheses must be positive")
+    scalar_variant = args.feature_variant in {"strategic_vector_v1", "strategic_vector_v2", "strategic_vector_v3"}
+    if args.scalar_obs != scalar_variant:
+        raise ValueError(
+            "scalar_obs and feature_variant must be paired: use --scalar-obs "
+            "with strategic_vector_v1/v2/v3, or neither for compact V6"
+        )
+    summary = collect(args)
+    print(json.dumps(summary, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

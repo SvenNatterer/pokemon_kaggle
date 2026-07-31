@@ -1,0 +1,20 @@
+# Standard PPO training profile using the complete development opponent pool.
+deck: decks/deck_bank/bank_18.csv
+model_name: models/ppo_default_training.zip
+opp_pool: decks/pools/default_training.json
+total_timesteps: 1000000
+learning_rate: 0.0001
+num_envs: 7
+n_steps: 2048
+batch_size: 1024
+n_epochs: 2
+ent_coef: 0.008
+clip_range: 0.12
+target_kl: 0.03
+policy_version: v6
+feature_variant: compact
+enable_archetype_prediction: false
+pfsp_update_steps: 250000
+pfsp_window_games: 150
+checkpoint_eval_steps: 250000
+checkpoint_eval_games_per_opponent: 50

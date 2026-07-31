@@ -17,6 +17,9 @@ from src.models.custom_policy import (
 import src.env.env_wrapper as env_wrapper_module
 from src.env.env_wrapper import (
     PokemonTCGEnv,
+    STRATEGIC_VECTOR_V1_DIM,
+    STRATEGIC_VECTOR_V2_DIM,
+    STRATEGIC_VECTOR_V3_DIM,
     bound_entity_energy_features,
     encode_energy_count,
     encode_hidden_card_count,
@@ -161,6 +164,222 @@ def test_structured_feature_extractor_output_shape():
 
     features = extractor(tensor_observation)
 
+    assert features.shape == (1, 256)
+    assert torch.isfinite(features).all()
+
+
+def test_strategic_scalar_vector_variant_uses_the_expected_width():
+    env = PokemonTCGEnv(
+        [6] * 60,
+        [5] * 60,
+        structured_v2=False,
+        feature_variant="strategic_vector_v1",
+    )
+    extractor = PokemonTCGFeatureExtractor(
+        env.observation_space,
+        features_dim=256,
+        feature_variant="strategic_vector_v1",
+    )
+    observation = env.observation_space.sample()
+    tensor_observation = {
+        key: torch.as_tensor(np.asarray(value)).unsqueeze(0)
+        for key, value in observation.items()
+    }
+
+    features = extractor(tensor_observation)
+
+    assert env.observation_space["vector"].shape == (STRATEGIC_VECTOR_V1_DIM,)
+    assert features.shape == (1, 256)
+    assert torch.isfinite(features).all()
+
+
+def test_strategic_scalar_vector_v2_uses_an_isolated_wider_contract():
+    env = PokemonTCGEnv(
+        [6] * 60,
+        [5] * 60,
+        structured_v2=False,
+        feature_variant="strategic_vector_v2",
+    )
+    extractor = PokemonTCGFeatureExtractor(
+        env.observation_space,
+        features_dim=256,
+        feature_variant="strategic_vector_v2",
+    )
+    observation = env.observation_space.sample()
+    features = extractor({
+        key: torch.as_tensor(np.asarray(value)).unsqueeze(0)
+        for key, value in observation.items()
+    })
+
+    assert env.observation_space["vector"].shape == (STRATEGIC_VECTOR_V2_DIM,)
+    assert STRATEGIC_VECTOR_V2_DIM > STRATEGIC_VECTOR_V1_DIM
+    assert features.shape == (1, 256)
+    assert torch.isfinite(features).all()
+
+
+def test_strategic_scalar_vector_v3_adds_rule_features_per_option():
+    env = PokemonTCGEnv(
+        [6] * 60,
+        [5] * 60,
+        structured_v2=False,
+        feature_variant="strategic_vector_v3",
+    )
+    extractor = PokemonTCGFeatureExtractor(
+        env.observation_space,
+        features_dim=256,
+        feature_variant="strategic_vector_v3",
+    )
+    observation = env.observation_space.sample()
+    features = extractor({
+        key: torch.as_tensor(np.asarray(value)).unsqueeze(0)
+        for key, value in observation.items()
+    })
+
+    assert env.observation_space["vector"].shape == (STRATEGIC_VECTOR_V3_DIM,)
+    assert STRATEGIC_VECTOR_V3_DIM > STRATEGIC_VECTOR_V2_DIM
+    assert features.shape == (1, 256)
+    assert torch.isfinite(features).all()
+
+
+def test_masked_entity_attention_ignores_padding_features():
+    env = PokemonTCGEnv([6] * 60, [5] * 60)
+    extractor = PokemonTCGFeatureExtractor(
+        env.observation_space, features_dim=256, entity_relation_mode="masked"
+    ).eval()
+    observation = env.observation_space.sample()
+    observation["entity_ids"][:] = 0
+    observation["entity_features"][:] = 0
+    observation["entity_ids"][0] = 6
+    observation["entity_features"][0, 0] = 1.0
+    observation["entity_features"][0, 2] = 1.0
+    observation["action_mask"][:] = 0
+    observation["action_mask"][0] = 1
+    baseline = {
+        key: torch.as_tensor(np.asarray(value)).unsqueeze(0)
+        for key, value in observation.items()
+    }
+    changed = {key: value.clone() for key, value in baseline.items()}
+    changed["entity_features"][0, 1:, :] = 1.0
+
+    with torch.no_grad():
+        baseline_features = extractor(baseline)
+        changed_features = extractor(changed)
+
+    assert torch.allclose(baseline_features, changed_features)
+
+
+def test_masked_entity_attention_handles_an_empty_board():
+    env = PokemonTCGEnv([6] * 60, [5] * 60)
+    extractor = PokemonTCGFeatureExtractor(
+        env.observation_space, features_dim=256, entity_relation_mode="masked"
+    )
+    observation = env.observation_space.sample()
+    observation["entity_ids"][:] = 0
+    observation["entity_features"][:] = 0
+    observation["action_mask"][:] = 0
+    observation["action_mask"][0] = 1
+    tensor_observation = {
+        key: torch.as_tensor(np.asarray(value)).unsqueeze(0)
+        for key, value in observation.items()
+    }
+
+    features = extractor(tensor_observation)
+
+    assert torch.isfinite(features).all()
+
+
+def test_relation_types_preserve_board_direction_and_roles():
+    entity_ids = torch.tensor([[6, 7, 0, 0, 0, 0, 8] + [0] * 5])
+    entity_features = torch.zeros((1, 12, 36))
+    entity_features[0, 0, 0] = 1.0
+    entity_features[0, 0, 2] = 1.0  # Our active.
+    entity_features[0, 1, 0] = 1.0
+    entity_features[0, 1, 3] = 0.0  # Our first bench slot.
+    entity_features[0, 6, 0] = 1.0
+    entity_features[0, 6, 1] = 1.0
+    entity_features[0, 6, 2] = 1.0  # Opponent active.
+
+    relation_types = PokemonTCGFeatureExtractor._entity_relation_types(
+        entity_ids, entity_features
+    )
+
+    assert relation_types[0, 0, 0] == 1  # self
+    assert relation_types[0, 0, 1] == 4  # own active -> own bench
+    assert relation_types[0, 1, 0] == 3  # own bench -> own active
+    assert relation_types[0, 0, 6] == 9  # own active -> opponent active
+    assert relation_types[0, 2, 0] == 0  # padded query remains padding
+
+
+def test_python_object_relation_types_match_vectorized_relations():
+    entity_ids = torch.tensor([[6, 7, 0, 0, 0, 0, 8] + [0] * 5])
+    entity_features = torch.zeros((1, 12, 36))
+    entity_features[0, 0, 2] = 1.0  # Our active.
+    entity_features[0, 6, 1] = 1.0
+    entity_features[0, 6, 2] = 1.0  # Opponent active.
+
+    vectorized = PokemonTCGFeatureExtractor._entity_relation_types(entity_ids, entity_features)
+    python_objects = PokemonTCGFeatureExtractor._python_object_relation_types(
+        entity_ids, entity_features
+    )
+
+    assert torch.equal(python_objects, vectorized)
+
+
+def test_relational_entity_attention_forward_is_finite():
+    env = PokemonTCGEnv([6] * 60, [5] * 60)
+    extractor = PokemonTCGFeatureExtractor(
+        env.observation_space, features_dim=256, entity_relation_mode="relational"
+    )
+    observation = env.observation_space.sample()
+    observation["action_mask"][:] = 0
+    observation["action_mask"][0] = 1
+    tensor_observation = {
+        key: torch.as_tensor(np.asarray(value)).unsqueeze(0)
+        for key, value in observation.items()
+    }
+
+    features = extractor(tensor_observation)
+
+    assert features.shape == (1, 256)
+    assert torch.isfinite(features).all()
+
+
+def test_python_object_relational_attention_forward_is_finite():
+    env = PokemonTCGEnv([6] * 60, [5] * 60)
+    extractor = PokemonTCGFeatureExtractor(
+        env.observation_space, features_dim=256, entity_relation_mode="python_object_relational"
+    )
+    observation = env.observation_space.sample()
+    observation["action_mask"][:] = 0
+    observation["action_mask"][0] = 1
+    tensor_observation = {
+        key: torch.as_tensor(np.asarray(value)).unsqueeze(0)
+        for key, value in observation.items()
+    }
+
+    features = extractor(tensor_observation)
+
+    assert features.shape == (1, 256)
+    assert torch.isfinite(features).all()
+
+
+def test_two_step_entity_attention_forward_is_finite():
+    env = PokemonTCGEnv([6] * 60, [5] * 60)
+    extractor = PokemonTCGFeatureExtractor(
+        env.observation_space, features_dim=256, entity_relation_mode="two_step"
+    )
+    observation = env.observation_space.sample()
+    observation["action_mask"][:] = 0
+    observation["action_mask"][0] = 1
+    tensor_observation = {
+        key: torch.as_tensor(np.asarray(value)).unsqueeze(0)
+        for key, value in observation.items()
+    }
+
+    features = extractor(tensor_observation)
+
+    assert hasattr(extractor, "entity_attn_second")
+    assert hasattr(extractor, "entity_relation_bias_second")
     assert features.shape == (1, 256)
     assert torch.isfinite(features).all()
 

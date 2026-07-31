@@ -21,12 +21,18 @@ if __name__ == "__main__":
         deck_b = sys.argv[4]
         num_games = int(sys.argv[5])
         enable_lookahead = False
+        lookahead_config = None
         if len(sys.argv) >= 7 and sys.argv[6].lower() in ("1", "true", "--lookahead", "lookahead"):
             enable_lookahead = True
+        if len(sys.argv) >= 8:
+            lookahead_config = json.loads(sys.argv[7])
+            if not isinstance(lookahead_config, dict):
+                raise ValueError("Lookahead config must be a JSON object")
 
         try:
             result, details = evaluate_vs_opponent(
-                model_a, deck_a, model_b, deck_b, num_games, return_details=True, enable_lookahead=enable_lookahead
+                model_a, deck_a, model_b, deck_b, num_games, return_details=True,
+                enable_lookahead=enable_lookahead, lookahead_config=lookahead_config,
             )
             wins, losses, draws, pw1, dw1, bw1, pw2, dw2, bw2 = result
             print(f"RESULT:{wins},{losses},{draws},{pw1},{dw1},{bw1},{pw2},{dw2},{bw2}")

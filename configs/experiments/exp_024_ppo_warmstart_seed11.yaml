@@ -1,0 +1,25 @@
+# EXP-024 Warmstart (Exact EXP-005 Hyperparameter Match)
+deck: decks/deck_bank/bank_54.csv
+model_name: models/ppo_v6_exp024_bc_1m_seed11.zip
+base_model: models/ppo_v6_exp024_bc_warmstart_seed11.zip
+opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
+total_timesteps: 1000000
+
+algorithm: PPO
+learning_rate: 0.0001
+n_steps: 512
+batch_size: 1024
+n_epochs: 2
+gamma: 0.999
+gae_lambda: 0.95
+clip_range: 0.12
+ent_coef: 0.008
+
+# Lookahead Teacher Distillation Parameters (EXP-005 match)
+distill_coef: 0.1
+teacher_sample_rate: 0.05
+lookahead:
+  max_depth: 1
+  beam_width: 2
+  node_budget: 8
+  max_combinations: 16

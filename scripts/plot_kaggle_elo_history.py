@@ -16,13 +16,53 @@ headers = {
 }
 url = 'https://www.kaggle.com/api/i/competitions.EpisodeService/ListEpisodes'
 
-subs_info = [
-    {"id": 54834368, "desc": "V6 Compact Hydrapple bank_70"},
-    {"id": 54815682, "desc": "Alakazam V6 compact PFSP 2M"},
-    {"id": 54793285, "desc": "V6 Compact bank_54 scratch PFSP"},
-    {"id": 54784364, "desc": "V6 Compact Alakazam 1M"},
-    {"id": 54723890, "desc": "Base A | V6 energy scaling"}
-]
+import csv
+import io
+import subprocess
+
+def get_selected_completed_submissions(target_rule_bots=(55104361, 54901090), recent_count=2):
+    """Fetch completed submissions from Kaggle CLI: last `recent_count` submissions plus specified rule-based bots."""
+    cli_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "venv", "bin", "kaggle")
+    if not os.path.exists(cli_path):
+        cli_path = "kaggle"
+    try:
+        res = subprocess.run(
+            [cli_path, "competitions", "submissions", "-c", "pokemon-tcg-ai-battle", "--csv"],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        all_completed = []
+        reader = csv.DictReader(io.StringIO(res.stdout))
+        for row in reader:
+            if row.get("status") == "SubmissionStatus.COMPLETE":
+                sub_id = int(row["ref"])
+                desc = row.get("description") or row.get("fileName") or f"Sub {sub_id}"
+                all_completed.append({"id": sub_id, "desc": desc})
+
+        selected = {}
+        # 1. Add last `recent_count` completed submissions
+        for sub in all_completed[:recent_count]:
+            selected[sub["id"]] = sub
+
+        # 2. Add good rule-based bot submissions
+        for sub in all_completed:
+            if sub["id"] in target_rule_bots and sub["id"] not in selected:
+                selected[sub["id"]] = sub
+
+        if selected:
+            # Sort by ID descending (most recent first)
+            return sorted(list(selected.values()), key=lambda x: x["id"], reverse=True)
+    except Exception as e:
+        print(f"Warning: Could not fetch submissions via Kaggle CLI: {e}")
+
+    return [
+        {"id": 55105079, "desc": "EXP-014 2M entity attention + gameplan guardrails"},
+        {"id": 55104361, "desc": "Official Kaggle Mega Lucario ex rule bot (726.9 Elo)"},
+        {"id": 54901090, "desc": "Alakazam Rule-Based Kaggle Bot (764.4 Elo)"},
+    ]
+
+subs_info = get_selected_completed_submissions(target_rule_bots=(55104361, 54901090), recent_count=2)
 
 # Paths relative to repository root
 reports_dir = "reports"
@@ -172,12 +212,12 @@ for sub_id, info in all_data.items():
     print(f"Saved plot for {sub_id} to {img_path}")
 
 # 2. Plot combined chart
-fig, ax = plt.subplots(figsize=(11, 6.5))
+fig, ax = plt.subplots(figsize=(12, 6.5))
 ax.set_facecolor('#1a1a24')
 fig.patch.set_facecolor('#111115')
 ax.grid(color='#2d2d3a', linestyle='--', linewidth=0.5)
 
-colors = ['#00e5ff', '#ff4655', '#00e676', '#ffd600', '#d500f9']
+colors = ['#00e5ff', '#ff4655', '#00e676', '#ffd600', '#d500f9', '#ff9100', '#ab47bc']
 
 for idx, (sub_id, info) in enumerate(all_data.items()):
     scores = info["scores"]
@@ -187,12 +227,18 @@ for idx, (sub_id, info) in enumerate(all_data.items()):
     games = list(range(len(scores)))
     ax.plot(games, scores, color=colors[idx % len(colors)], linewidth=2, label=f"Sub {sub_id}: {desc} ({int(scores[-1])} Elo)")
 
-ax.set_title("Vergleich Elo-Entwicklung der letzten 5 Submissions", color='white', fontsize=15, weight='bold', pad=15)
+ax.set_title("Vergleich Elo-Entwicklung der Kaggle Submissions", color='white', fontsize=15, weight='bold', pad=15)
 ax.set_xlabel("Anzahl Spiele ab Einreichung", color='#888899', fontsize=11, labelpad=8)
 ax.set_ylabel("Elo Rating", color='#888899', fontsize=11, labelpad=8)
 ax.tick_params(colors='#888899', labelsize=9)
 
-legend = ax.legend(facecolor='#111115', edgecolor='#2d2d3a', loc='upper left')
+legend = ax.legend(
+    bbox_to_anchor=(1.02, 1),
+    loc='upper left',
+    facecolor='#111115',
+    edgecolor='#2d2d3a',
+    borderaxespad=0.5
+)
 for text in legend.get_texts():
     text.set_color('#a0a0b0')
     text.set_fontsize(9)
@@ -200,9 +246,8 @@ for text in legend.get_texts():
 for spine in ax.spines.values():
     spine.set_color('#2d2d3a')
 
-plt.tight_layout()
 combined_path = os.path.join(reports_dir, "kaggle_elos_combined.png")
-plt.savefig(combined_path, dpi=150, facecolor=fig.get_facecolor(), edgecolor='none')
+plt.savefig(combined_path, dpi=150, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
 plt.close()
 print(f"Saved combined plot to {combined_path}")
 

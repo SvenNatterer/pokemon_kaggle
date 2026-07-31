@@ -12,7 +12,7 @@ import importlib.util
 from pathlib import Path
 
 
-def verify_package(archive_path: str) -> bool:
+def verify_package(archive_path: str, is_rule_bot: bool = False) -> bool:
     print(f"=== Verifying Submission Archive: {archive_path} ===")
     
     if not os.path.exists(archive_path):
@@ -39,7 +39,9 @@ def verify_package(archive_path: str) -> bool:
             return False
 
         # Check required files
-        required_files = ["main.py", "deck.csv", "ppo_pokemon_final.zip"]
+        required_files = ["main.py", "deck.csv"]
+        if not is_rule_bot:
+            required_files.append("ppo_pokemon_final.zip")
         for rf in required_files:
             fp = os.path.join(temp_dir, rf)
             if not os.path.exists(fp):
@@ -78,7 +80,8 @@ def verify_package(archive_path: str) -> bool:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Verify Kaggle submission package.")
     parser.add_argument("archive_path", help="Path to submission archive (.tar.gz or .zip)")
+    parser.add_argument("--rule-bot", action="store_true", help="Verify as a heuristic rule-based bot without a zipped PPO model")
     args = parser.parse_args()
     
-    success = verify_package(args.archive_path)
+    success = verify_package(args.archive_path, is_rule_bot=args.rule_bot)
     sys.exit(0 if success else 1)

@@ -61,6 +61,21 @@ MAX_CARD_SKILLS = 3
 MAX_SKILL_ID = (MAX_CARD_ID + 1) * MAX_CARD_SKILLS
 EVOLUTION_EMBED_DIM = 12
 
+# Directed board-relation labels used by the opt-in relational entity encoder.
+# Zero is reserved for padded slots; the remaining labels separate same-entity,
+# ally, and opponent interactions by active/bench role.
+RELATION_PADDING = 0
+RELATION_SELF = 1
+RELATION_ALLY_BENCH_TO_BENCH = 2
+RELATION_ALLY_BENCH_TO_ACTIVE = 3
+RELATION_ALLY_ACTIVE_TO_BENCH = 4
+RELATION_ALLY_ACTIVE_TO_ACTIVE = 5
+RELATION_OPPONENT_BENCH_TO_BENCH = 6
+RELATION_OPPONENT_BENCH_TO_ACTIVE = 7
+RELATION_OPPONENT_ACTIVE_TO_BENCH = 8
+RELATION_OPPONENT_ACTIVE_TO_ACTIVE = 9
+RELATION_TYPE_COUNT = 10
+
 
 def _effect_metadata(text):
     """Turn English rules text into coarse, learnable game-mechanic features.
@@ -349,10 +364,19 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         features_dim: int = 256,
         feature_variant: str = "compact",
         use_card_table: bool = False,
+        entity_relation_mode: str = "baseline",
         **kwargs,
     ):
         super().__init__(observation_space, features_dim)
-        self.feature_variant = "compact"
+        self.feature_variant = str(feature_variant)
+        if entity_relation_mode not in {
+            "baseline", "masked", "relational", "two_step", "python_object_relational"
+        }:
+            raise ValueError(
+                "entity_relation_mode must be one of: baseline, masked, relational, two_step, "
+                "python_object_relational"
+            )
+        self.entity_relation_mode = entity_relation_mode
         # Experimental, opt-in path used by the card-table benchmark. Keeping
         # this disabled preserves existing checkpoint behaviour and timings.
         self.use_card_table = bool(use_card_table)
@@ -370,6 +394,10 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             "option_features",
         }
         self.structured_v2 = required_v2_keys.issubset(observation_space.spaces)
+        if self.structured_v2 and self.feature_variant != "compact":
+            raise ValueError(
+                "Structured Observation V2 only supports feature_variant='compact'."
+            )
 
         if not self.structured_v2:
             # Do not change module names or shapes: existing checkpoints rely on them.
@@ -432,6 +460,24 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
             nn.ReLU(),
         )
         self.entity_attn = nn.MultiheadAttention(embed_dim=64, num_heads=4, batch_first=True)
+        if self.entity_relation_mode != "baseline":
+            # The role of an entity is observable from its field slot: owner
+            # (self/opponent) and active or bench position (0..5).
+            self.entity_owner_embedding = nn.Embedding(2, 64)
+            self.entity_position_embedding = nn.Embedding(6, 64)
+        if self.entity_relation_mode in {"relational", "two_step", "python_object_relational"}:
+            # A separate additive attention bias per relation type and head is
+            # more compact than a graph layer, while retaining directionality.
+            self.entity_relation_bias = nn.Embedding(RELATION_TYPE_COUNT, 4)
+            nn.init.zeros_(self.entity_relation_bias.weight)
+        if self.entity_relation_mode == "two_step":
+            # A second residual relation-aware pass allows each entity to use
+            # information aggregated by the first pass (two-hop messaging).
+            self.entity_attn_second = nn.MultiheadAttention(
+                embed_dim=64, num_heads=4, batch_first=True
+            )
+            self.entity_relation_bias_second = nn.Embedding(RELATION_TYPE_COUNT, 4)
+            nn.init.zeros_(self.entity_relation_bias_second.weight)
         self.latest_attn_entropy = 0.0
         option_input_dim = (
             card_repr_dim + ATTACK_EMBED_DIM + ATTACK_METADATA_DIM + 8 + 6 + OPTION_FEATURE_DIM
@@ -567,6 +613,94 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
         self._option_embedding_cache = None
         return cached
 
+    @staticmethod
+    def _entity_role_ids(entity_features):
+        """Return observable owner and field-position IDs for each entity slot."""
+        owner_ids = entity_features[..., 1].round().long().clamp_(0, 1)
+        active = entity_features[..., 2] > 0.5
+        bench_position = (entity_features[..., 3] * 4.0).round().long().clamp_(0, 4) + 1
+        position_ids = torch.where(active, torch.zeros_like(bench_position), bench_position)
+        return owner_ids, position_ids, active
+
+    @staticmethod
+    def _entity_relation_types(entity_ids, entity_features):
+        """Build directed relation labels without exposing hidden information."""
+        present = entity_ids > 0
+        owner_ids, _, active = PokemonTCGFeatureExtractor._entity_role_ids(entity_features)
+        query_present = present.unsqueeze(-1)
+        key_present = present.unsqueeze(-2)
+        valid_pair = query_present & key_present
+        query_owner = owner_ids.unsqueeze(-1)
+        key_owner = owner_ids.unsqueeze(-2)
+        query_active = active.unsqueeze(-1).long()
+        key_active = active.unsqueeze(-2).long()
+        role_offset = query_active * 2 + key_active
+
+        relation_types = torch.zeros_like(valid_pair, dtype=torch.long)
+        same_entity = torch.eye(
+            entity_ids.shape[-1], device=entity_ids.device, dtype=torch.bool
+        ).unsqueeze(0) & valid_pair
+        same_owner = (query_owner == key_owner) & valid_pair & ~same_entity
+        opponent = (query_owner != key_owner) & valid_pair
+        relation_types = torch.where(
+            same_entity,
+            torch.full_like(relation_types, RELATION_SELF),
+            relation_types,
+        )
+        relation_types = torch.where(
+            same_owner,
+            role_offset + RELATION_ALLY_BENCH_TO_BENCH,
+            relation_types,
+        )
+        relation_types = torch.where(
+            opponent,
+            role_offset + RELATION_OPPONENT_BENCH_TO_BENCH,
+            relation_types,
+        )
+        return relation_types
+
+    @staticmethod
+    def _python_object_relation_types(entity_ids, entity_features):
+        """Rebuild observable board relations through Python objects.
+
+        This intentionally mirrors the legacy list/object relation path for
+        EXP-023. It is an ablation only: converting tensors to Python values and
+        iterating over every entity pair is expected to be slower than the
+        vectorized implementation above. The resulting labels are identical and
+        never expose hidden game state.
+        """
+        ids_by_batch = entity_ids.detach().to("cpu").tolist()
+        features_by_batch = entity_features.detach().to("cpu").tolist()
+        relation_batches = []
+        for ids, features in zip(ids_by_batch, features_by_batch):
+            entities = [
+                {
+                    "present": card_id > 0,
+                    "owner": int(round(values[1])),
+                    "active": values[2] > 0.5,
+                }
+                for card_id, values in zip(ids, features)
+            ]
+            relation_rows = [[RELATION_PADDING for _ in entities] for _ in entities]
+            for query_index, query in enumerate(entities):
+                if not query["present"]:
+                    continue
+                for key_index, key in enumerate(entities):
+                    if not key["present"]:
+                        continue
+                    if query_index == key_index:
+                        relation_rows[query_index][key_index] = RELATION_SELF
+                        continue
+                    role_offset = 2 * int(query["active"]) + int(key["active"])
+                    base = (
+                        RELATION_ALLY_BENCH_TO_BENCH
+                        if query["owner"] == key["owner"]
+                        else RELATION_OPPONENT_BENCH_TO_BENCH
+                    )
+                    relation_rows[query_index][key_index] = base + role_offset
+            relation_batches.append(relation_rows)
+        return torch.as_tensor(relation_batches, dtype=torch.long, device=entity_ids.device)
+
     def forward(self, observations):
         self._option_embedding_cache = None
         if not self.structured_v2:
@@ -598,11 +732,68 @@ class PokemonTCGFeatureExtractor(BaseFeaturesExtractor):
                 dim=-1,
             )
         )
-        attn_out, attn_weights = self.entity_attn(entity_embeds, entity_embeds, entity_embeds, need_weights=True)
+        if self.entity_relation_mode == "baseline":
+            attn_out, attn_weights = self.entity_attn(
+                entity_embeds, entity_embeds, entity_embeds, need_weights=True
+            )
+            entities = (entity_embeds + attn_out).flatten(start_dim=-2)
+        else:
+            entity_present = entity_ids > 0
+            # MultiheadAttention cannot attend a row with every key masked.
+            # Keep one harmless zero-valued anchor for an empty board, then
+            # zero the corresponding output below.
+            attention_present = entity_present.clone()
+            empty_boards = ~attention_present.any(dim=-1)
+            attention_present[empty_boards, 0] = True
+            owner_ids, position_ids, _ = self._entity_role_ids(
+                observations["entity_features"].float()
+            )
+            role_embeds = (
+                self.entity_owner_embedding(owner_ids)
+                + self.entity_position_embedding(position_ids)
+            ) * entity_present.unsqueeze(-1).to(entity_embeds.dtype)
+            entity_embeds = entity_embeds + role_embeds
+            attn_kwargs = {
+                "key_padding_mask": torch.zeros_like(entity_embeds[..., 0]).masked_fill(
+                    ~attention_present, float("-inf")
+                ),
+                "need_weights": True,
+            }
+            relation_types = None
+            if self.entity_relation_mode in {"relational", "two_step", "python_object_relational"}:
+                relation_builder = (
+                    self._python_object_relation_types
+                    if self.entity_relation_mode == "python_object_relational"
+                    else self._entity_relation_types
+                )
+                relation_types = relation_builder(entity_ids, observations["entity_features"].float())
+                relation_bias = self.entity_relation_bias(relation_types)
+                attn_kwargs["attn_mask"] = relation_bias.permute(0, 3, 1, 2).reshape(
+                    -1, ENTITY_SLOTS, ENTITY_SLOTS
+                ).to(entity_embeds.dtype)
+            attn_out, attn_weights = self.entity_attn(
+                entity_embeds, entity_embeds, entity_embeds, **attn_kwargs
+            )
+            entity_values = (entity_embeds + attn_out) * entity_present.unsqueeze(-1).to(
+                entity_embeds.dtype
+            )
+            if self.entity_relation_mode == "two_step":
+                second_attn_kwargs = dict(attn_kwargs)
+                second_relation_bias = self.entity_relation_bias_second(relation_types)
+                second_attn_kwargs["attn_mask"] = second_relation_bias.permute(
+                    0, 3, 1, 2
+                ).reshape(-1, ENTITY_SLOTS, ENTITY_SLOTS).to(entity_embeds.dtype)
+                second_attn_out, second_attn_weights = self.entity_attn_second(
+                    entity_values, entity_values, entity_values, **second_attn_kwargs
+                )
+                entity_values = (entity_values + second_attn_out) * entity_present.unsqueeze(
+                    -1
+                ).to(entity_embeds.dtype)
+                attn_weights = (attn_weights + second_attn_weights) / 2.0
+            entities = entity_values.flatten(start_dim=-2)
         eps = 1e-8
         attn_entropy_tensor = -torch.sum(attn_weights * torch.log(attn_weights + eps), dim=-1)
         self.latest_attn_entropy = float(attn_entropy_tensor.mean().detach().cpu().item())
-        entities = (entity_embeds + attn_out).flatten(start_dim=-2)
 
         hand = self._pool_card_set(observations["hand_ids"], card_table)
         discard_ids = observations["discard_ids"]

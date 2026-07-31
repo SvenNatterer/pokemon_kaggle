@@ -94,34 +94,30 @@ def read_deck_csv() -> list[int]:
     return deck
 
 
-def _fast_legal_fallback(obs: Observation, valid_options: int, stop_action: int, pending: list[int]) -> list[int]:
+def _fast_legal_fallback(obs_input: any, valid_options: int, stop_action: int, pending: list[int]) -> list[int]:
     """Pure Python greedy legal action selection for error/timeout fallback."""
-    min_count = max(0, int(obs.select.minCount or 0)) if obs and obs.select else 0
-    max_count = min(valid_options, max(0, int(obs.select.maxCount or 0))) if obs and obs.select else 0
-    
-    # Try advancing selection with legal options
-    for _ in range(max_count + 1):
-        if len(pending) >= min_count and len(pending) > 0:
-            action = stop_action
-        else:
-            legal = [i for i in range(min(valid_options, stop_action)) if i not in pending]
-            action = legal[0] if legal else stop_action
-        
-        pending, committed, invalid = advance_selection(obs, action, pending, stop_action=stop_action)
-        if invalid:
-            legal = [i for i in range(min(valid_options, stop_action)) if i not in pending]
-            fallback_action = legal[0] if legal else stop_action
-            pending, committed, _ = advance_selection(obs, fallback_action, pending, stop_action=stop_action)
-        if committed:
-            return [int(x) for x in pending]
-            
-    # Final defensive filling if loop exhausted
-    for index in range(valid_options):
-        if len(pending) >= min_count:
+    if isinstance(obs_input, dict):
+        select_info = obs_input.get("select") or {}
+        min_count = max(0, int(select_info.get("minCount") or 0)) if select_info else 0
+        max_count = min(valid_options, max(0, int(select_info.get("maxCount") or 0))) if select_info else 0
+    else:
+        select_info = getattr(obs_input, "select", None)
+        min_count = max(0, int(getattr(select_info, "minCount", 0) or 0)) if select_info else 0
+        max_count = min(valid_options, max(0, int(getattr(select_info, "maxCount", 0) or 0))) if select_info else 0
+
+    res = list(pending)
+    for i in range(min(valid_options, stop_action)):
+        if len(res) >= max_count and max_count > 0:
             break
-        if index not in pending:
-            pending.append(index)
-    return [int(x) for x in pending]
+        if i not in res:
+            res.append(i)
+        if len(res) >= min_count and min_count > 0:
+            break
+
+    if not res and min_count == 0 and valid_options > 0:
+        return [stop_action]
+        
+    return [int(x) for x in res]
 
 def agent(obs_dict: dict) -> list[int]:
     """Implement Your Pokémon Trading Card Game Agent with match time limit guardrails."""
@@ -159,19 +155,48 @@ def agent(obs_dict: dict) -> list[int]:
         print(f"[SAFETY FALLBACK] Accumulated match time ({match_accumulated_time:.2f}s) exceeded limit ({MAX_MATCH_TIME_SECONDS}s). Switching to fast fallback.", file=sys.stderr)
         fallback_mode = True
 
-    try:
-        obs: Observation = to_observation_class(obs_dict)
-    except Exception as e:
-        print(f"[ERROR] Failed to parse observation dict: {e}", file=sys.stderr)
-        match_accumulated_time += time.monotonic() - step_start_time
-        return []
+    valid_options = 0
+    if obs_dict.get("select") and obs_dict["select"].get("option"):
+        valid_options = len(obs_dict["select"]["option"])
 
-    valid_options = len(obs.select.option) if obs.select and obs.select.option else 0
     if valid_options == 0:
         match_accumulated_time += time.monotonic() - step_start_time
         return []
 
     stop_action = valid_options
+
+    if fallback_mode:
+        res = _fast_legal_fallback(obs_dict, valid_options, stop_action, [])
+        match_accumulated_time += time.monotonic() - step_start_time
+        return res
+
+    try:
+        obs: Observation = to_observation_class(obs_dict)
+    except Exception as e:
+        print(f"[ERROR] Failed to parse observation dict: {e}. Switching to legal fallback.", file=sys.stderr)
+        fallback_mode = True
+        res = _fast_legal_fallback(obs_dict, valid_options, stop_action, [])
+        match_accumulated_time += time.monotonic() - step_start_time
+        return res
+
+    rule_bot_flag = os.path.exists("rule_bot.txt") or os.path.exists(os.path.join(AGENT_DIR, "rule_bot.txt"))
+    if rule_bot_flag:
+        try:
+            from src.agents.kaggle_bots.mega_lucario_agent import agent as lucario_rule_agent
+            res = lucario_rule_agent(obs)
+            if isinstance(res, list) and len(res) > 0:
+                match_accumulated_time += time.monotonic() - step_start_time
+                return res
+            else:
+                res = _fast_legal_fallback(obs, valid_options, stop_action, [])
+                match_accumulated_time += time.monotonic() - step_start_time
+                return res
+        except Exception as e:
+            print(f"[ERROR] Rule agent execution failed: {e}. Switching to fallback mode.", file=sys.stderr)
+            fallback_mode = True
+            res = _fast_legal_fallback(obs_dict, valid_options, stop_action, [])
+            match_accumulated_time += time.monotonic() - step_start_time
+            return res
 
     if fallback_mode:
         res = _fast_legal_fallback(obs, valid_options, stop_action, [])

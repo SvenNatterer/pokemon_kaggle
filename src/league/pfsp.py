@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
@@ -95,8 +96,11 @@ class PFSPLite:
     initial_weights: Sequence[float]
     prior_games: float = 4.0
     random_fraction: float = 0.20
-    max_probability: float = 0.35
+    max_probability: float = 0.18
+    window_games: int = 150
+    minimum_games: int = 25
     records: dict[str, OpponentRecord] = field(init=False)
+    recent_outcomes: dict[str, deque[int]] = field(init=False)
     current_probabilities: list[float] = field(init=False)
     segment_records: dict[str, OpponentRecord] = field(init=False)
     completed_segments: int = 0
@@ -113,8 +117,13 @@ class PFSPLite:
             raise ValueError("random_fraction must be between 0 and 1")
         if not 0.0 < self.max_probability <= 1.0:
             raise ValueError("max_probability must be between 0 and 1")
+        if self.window_games <= 0 or self.minimum_games <= 0:
+            raise ValueError("window_games and minimum_games must be positive")
 
         self.records = {label: OpponentRecord() for label in self.labels}
+        self.recent_outcomes = {
+            label: deque(maxlen=self.window_games) for label in self.labels
+        }
         self.segment_records = {label: OpponentRecord() for label in self.labels}
         self.current_probabilities = _bounded_distribution(
             self.initial_weights,
@@ -130,6 +139,7 @@ class PFSPLite:
         if label not in self.records or outcome not in {-1, 0, 1}:
             return False
         self.records[label].add(outcome)
+        self.recent_outcomes[label].append(outcome)
         self.segment_records[label].add(outcome)
         return True
 
@@ -168,6 +178,9 @@ class PFSPLite:
                 raise ValueError("PFSP state result counts do not add up to games")
             restored_records[label] = record
         self.records = restored_records
+        self.recent_outcomes = {
+            label: deque(maxlen=self.window_games) for label in self.labels
+        }
         self.segment_records = {label: OpponentRecord() for label in self.labels}
         self.completed_segments = max(0, int(summary.get("completed_segments", 0)))
 
@@ -177,9 +190,10 @@ class PFSPLite:
 
         raw_scores = []
         for label in self.labels:
-            mean, uncertainty = self.records[label].posterior(self.prior_games)
-            informativeness = 4.0 * mean * (1.0 - mean)
-            raw_scores.append(max(1e-12, informativeness * uncertainty))
+            recent = OpponentRecord()
+            for outcome in self.recent_outcomes[label]:
+                recent.add(outcome)
+            raw_scores.append(self._weakness_score(recent))
 
         count = len(self.labels)
         score_total = sum(raw_scores)
@@ -207,6 +221,57 @@ class PFSPLite:
         self.completed_segments += 1
         self.segment_records = {label: OpponentRecord() for label in self.labels}
         return list(self.current_probabilities), segment
+
+    def recent_macro_win_rate(self) -> float | None:
+        """Equal-opponent mean score over the retained recent-game windows."""
+        scores = self._recent_win_rates()
+        return sum(scores) / len(scores) if scores else None
+
+    def recent_worst_win_rate(self) -> float | None:
+        """Lowest per-opponent score over populated recent-game windows."""
+        scores = self._recent_win_rates()
+        return min(scores) if scores else None
+
+    def _recent_win_rates(self) -> list[float]:
+        return [
+            sum(1.0 if value > 0 else 0.5 if value == 0 else 0.0 for value in outcomes)
+            / len(outcomes)
+            for outcomes in self.recent_outcomes.values()
+            if outcomes
+        ]
+
+    def effective_opponent_count(self) -> float:
+        """Exponentiated entropy of the current sampling distribution."""
+        entropy = -sum(
+            probability * math.log(probability)
+            for probability in self.current_probabilities
+            if probability > 0.0
+        )
+        return math.exp(entropy)
+
+    def _weakness_score(self, record: OpponentRecord) -> float:
+        """Prioritise recent weak matchups while retaining exploration coverage."""
+        if record.games < self.minimum_games:
+            return 1.0
+
+        mean, uncertainty = record.posterior(self.prior_games)
+        upper_confidence = min(1.0, mean + 1.96 * uncertainty)
+        if mean < 0.20:
+            # A truly impossible matchup should be monitored, not dominate training.
+            base = 1.25 if record.games >= 75 and upper_confidence < 0.25 else 4.0
+        elif mean < 0.35:
+            base = 5.0
+        elif mean < 0.50:
+            base = 3.0
+        elif mean < 0.65:
+            base = 2.0
+        elif mean < 0.80:
+            base = 1.0
+        elif mean < 0.90:
+            base = 0.4
+        else:
+            base = 0.1
+        return base * (1.0 + min(1.0, uncertainty / 0.15))
 
     def _record_dict(self, record: OpponentRecord) -> dict:
         mean, uncertainty = record.posterior(self.prior_games)

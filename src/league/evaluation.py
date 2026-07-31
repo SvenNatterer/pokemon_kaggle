@@ -75,7 +75,16 @@ def evaluate_vs_baseline(model_path, deck_path, num_games=10):
     return wins
 
 
-def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_games=10, return_details=False, enable_lookahead=False):
+def evaluate_vs_opponent(
+    model1_path,
+    deck1_path,
+    model2_path,
+    deck2_path,
+    num_games=10,
+    return_details=False,
+    enable_lookahead=False,
+    lookahead_config=None,
+):
     deck1 = read_deck(deck1_path)
     deck2 = read_deck(deck2_path)
     
@@ -97,6 +106,14 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
         "player_0": {"games": 0, "wins": 0, "losses": 0, "draws": 0, "turns": 0},
         "player_1": {"games": 0, "wins": 0, "losses": 0, "draws": 0, "turns": 0},
     }
+    lookahead_metrics = {
+        "base_predictions": 0,
+        "search_attempts": 0,
+        "search_decisions": 0,
+        "overrides": 0,
+        "search_errors": 0,
+        "confidence_sum": 0.0,
+    }
     
     def run_direction(
         learner_model_path,
@@ -115,8 +132,12 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
         if enable_lookahead and learner_model is not None:
             try:
                 from src.models.lookahead_inference import LookaheadInferenceAgent
+                from src.training.lookahead_teacher import LookaheadConfig
                 learner_model = LookaheadInferenceAgent(
-                    learner_model, my_deck=learner_deck, opponent_deck=opponent_deck
+                    learner_model,
+                    my_deck=learner_deck,
+                    opponent_deck=opponent_deck,
+                    config=LookaheadConfig(**lookahead_config) if lookahead_config else None,
                 )
             except Exception as e:
                 print(f"[WARNING] Failed to wrap model with LookaheadInferenceAgent: {e}")
@@ -188,6 +209,10 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
                     perspective["draws"] += 1
         finally:
             env.close()
+            if enable_lookahead and hasattr(learner_model, "diagnostics_snapshot"):
+                snapshot = learner_model.diagnostics_snapshot()
+                for key in lookahead_metrics:
+                    lookahead_metrics[key] += snapshot[key]
 
     games_as_player_0 = (num_games + 1) // 2
     games_as_player_1 = num_games // 2
@@ -215,7 +240,7 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
         for values in perspective_results.values():
             games = values["games"]
             values["mean_turns"] = values["turns"] / games if games else 0.0
-        return result, {
+        details = {
             "total_turns": total_turns,
             "mean_turns": total_turns / num_games if num_games else 0.0,
             "reason_counts": reason_counts,
@@ -223,4 +248,13 @@ def evaluate_vs_opponent(model1_path, deck1_path, model2_path, deck2_path, num_g
             "opponent_win_reasons": opponent_win_reasons,
             "perspective": perspective_results,
         }
+        if enable_lookahead:
+            decisions = lookahead_metrics["search_decisions"]
+            details["lookahead"] = {
+                "config": dict(lookahead_config or {}),
+                **lookahead_metrics,
+                "override_rate": lookahead_metrics["overrides"] / decisions if decisions else 0.0,
+                "mean_confidence": lookahead_metrics["confidence_sum"] / decisions if decisions else 0.0,
+            }
+        return result, details
     return result

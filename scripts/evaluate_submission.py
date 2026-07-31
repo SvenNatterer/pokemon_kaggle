@@ -86,11 +86,16 @@ def pair_cache_signature(
     candidate: dict[str, str],
     opponent: dict[str, str],
     games: int,
+    *,
+    lookahead: bool = False,
+    lookahead_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Identify every input that changes a candidate/opponent result."""
     return {
         "version": EVALUATION_CACHE_VERSION,
         "games": int(games),
+        "lookahead": bool(lookahead),
+        "lookahead_config": lookahead_config if lookahead else None,
         "candidate": {
             "model_sha256": bot_digest(candidate["model_path"]),
             "deck_sha256": file_digest(candidate["deck_path"]),
@@ -119,8 +124,14 @@ def load_cached_pair(
     candidate: dict[str, str],
     opponent: dict[str, str],
     games: int,
+    *,
+    lookahead: bool = False,
+    lookahead_config: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    signature = pair_cache_signature(candidate, opponent, games)
+    signature = pair_cache_signature(
+        candidate, opponent, games,
+        lookahead=lookahead, lookahead_config=lookahead_config,
+    )
     payload = read_json(pair_cache_path(cache_dir, signature), {})
     if not isinstance(payload, dict) or payload.get("signature") != signature:
         return None
@@ -152,6 +163,9 @@ def save_cached_pair(
     opponent: dict[str, str],
     games: int,
     row: dict[str, Any],
+    *,
+    lookahead: bool = False,
+    lookahead_config: dict[str, Any] | None = None,
 ) -> None:
     if row.get("crashed"):
         return
@@ -159,7 +173,10 @@ def save_cached_pair(
         return
     if sum(int(row.get(key, 0)) for key in ("wins", "losses", "draws")) != games:
         return
-    signature = pair_cache_signature(candidate, opponent, games)
+    signature = pair_cache_signature(
+        candidate, opponent, games,
+        lookahead=lookahead, lookahead_config=lookahead_config,
+    )
     stored_row = {**row, "cached": False}
     atomic_write_json(
         pair_cache_path(cache_dir, signature),
@@ -373,6 +390,7 @@ def evaluate_pair(
     timeout: int,
     worker_python: str,
     lookahead: bool = False,
+    lookahead_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     command = [
         worker_python,
@@ -385,6 +403,8 @@ def evaluate_pair(
     ]
     if lookahead:
         command.append("1")
+        if lookahead_config:
+            command.append(json.dumps(lookahead_config, sort_keys=True))
     child_environment = os.environ.copy()
     for variable in (
         "OMP_NUM_THREADS",
@@ -445,13 +465,17 @@ def evaluate_pairs(
     cache_dir: str | None = None,
     force: bool = False,
     lookahead: bool = False,
+    lookahead_config: dict[str, Any] | None = None,
 ):
     """Yield cached or newly completed independent matchups."""
     pairs = []
     for candidate in candidates:
         for opponent in opponents:
             if cache_dir and not force:
-                cached = load_cached_pair(cache_dir, candidate, opponent, games)
+                cached = load_cached_pair(
+                    cache_dir, candidate, opponent, games,
+                    lookahead=lookahead, lookahead_config=lookahead_config,
+                )
                 if cached is not None:
                     yield candidate, opponent, cached
                     continue
@@ -463,11 +487,15 @@ def evaluate_pairs(
     if active_workers == 1:
         for candidate, opponent in pairs:
             row = evaluate_pair(
-                candidate, opponent, games, timeout, worker_python, lookahead=lookahead
+                candidate, opponent, games, timeout, worker_python,
+                lookahead=lookahead, lookahead_config=lookahead_config,
             )
             row["cached"] = False
             if cache_dir:
-                save_cached_pair(cache_dir, candidate, opponent, games, row)
+                save_cached_pair(
+                    cache_dir, candidate, opponent, games, row,
+                    lookahead=lookahead, lookahead_config=lookahead_config,
+                )
             yield candidate, opponent, row
         return
 
@@ -481,6 +509,7 @@ def evaluate_pairs(
                 timeout,
                 worker_python,
                 lookahead,
+                lookahead_config,
             ): (candidate, opponent)
             for candidate, opponent in pairs
         }
@@ -489,7 +518,10 @@ def evaluate_pairs(
             row = future.result()
             row["cached"] = False
             if cache_dir:
-                save_cached_pair(cache_dir, candidate, opponent, games, row)
+                save_cached_pair(
+                    cache_dir, candidate, opponent, games, row,
+                    lookahead=lookahead, lookahead_config=lookahead_config,
+                )
             yield candidate, opponent, row
 
 
@@ -683,6 +715,11 @@ def main() -> int:
         help="Enable inference-time lookahead tree search for candidate decisions.",
     )
     parser.add_argument(
+        "--lookahead-config",
+        default="",
+        help="JSON object with LookaheadConfig overrides; requires --lookahead.",
+    )
+    parser.add_argument(
         "--best-candidate-file", default="",
         help="Optional JSON destination for the top candidate selected by Wilson lower bound.",
     )
@@ -691,6 +728,14 @@ def main() -> int:
     args = parser.parse_args()
     if args.games <= 0 or args.timeout <= 0 or args.workers <= 0:
         parser.error("--games, --timeout, and --workers must be positive")
+    if args.lookahead_config and not args.lookahead:
+        parser.error("--lookahead-config requires --lookahead")
+    try:
+        lookahead_config = json.loads(args.lookahead_config) if args.lookahead_config else None
+    except json.JSONDecodeError as exc:
+        parser.error(f"Invalid --lookahead-config JSON: {exc.msg}")
+    if lookahead_config is not None and not isinstance(lookahead_config, dict):
+        parser.error("--lookahead-config must be a JSON object")
 
     holdout = load_or_create_holdout(args)
     opponents = holdout.get("opponents", [])
@@ -713,6 +758,8 @@ def main() -> int:
     print(f"Worker python: {worker_python}")
     print(f"Games per pair: {args.games}")
     print(f"Lookahead Search: {'ENABLED' if args.lookahead else 'DISABLED'}")
+    if lookahead_config:
+        print(f"Lookahead Config: {json.dumps(lookahead_config, sort_keys=True)}")
     print_entries("Opponents", opponents)
     print_entries("Candidates", candidates)
 
@@ -736,6 +783,7 @@ def main() -> int:
         cache_dir=cache_dir,
         force=args.force,
         lookahead=args.lookahead,
+        lookahead_config=lookahead_config,
     ):
         pair_index += 1
         print(

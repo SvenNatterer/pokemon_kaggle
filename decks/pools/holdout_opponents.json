@@ -3,72 +3,79 @@
   "opponents": [
     {
       "action_space_size": 66,
-      "archetype": "Arboliva ex",
-      "deck_id": "bank_99",
-      "deck_path": "decks/deck_bank/bank_99.csv",
+      "archetype": "Alakazam v8 Rule-Bot",
+      "deck_id": "deck_kaggle_alakazam_v8",
+      "deck_path": "decks/kaggle_bots/deck_kaggle_alakazam_v8.csv",
       "feature_variant": "compact",
-      "label": "ppo_v6_compact_a_bank_99",
-      "model_path": "models/holdout/v6/ppo_v6_deck_bank_99_compact_a.zip",
+      "label": "kaggle_rule_bot_alakazam_v8",
+      "model_path": "src/agents/kaggle_bots/alakazam_v8_agent.py",
+      "policy_family": "rule_based",
+      "policy_version": "v6",
+      "reward_variant": "potential"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "Mega Lucario ex Rule-Bot",
+      "deck_id": "deck_kaggle_mega_lucario",
+      "deck_path": "decks/kaggle_bots/deck_kaggle_mega_lucario.csv",
+      "feature_variant": "compact",
+      "label": "kaggle_rule_bot_mega_lucario",
+      "model_path": "src/agents/kaggle_bots/mega_lucario_agent.py",
+      "policy_family": "rule_based",
+      "policy_version": "v6",
+      "reward_variant": "potential"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "Dragapult Heuristic Bot",
+      "deck_id": "deck_kaggle_dragapult",
+      "deck_path": "decks/kaggle_bots/deck_kaggle_dragapult.csv",
+      "feature_variant": "compact",
+      "label": "kaggle_rule_bot_dragapult",
+      "model_path": "src/agents/kaggle_bots/dragapult_agent.py",
+      "policy_family": "rule_based",
+      "policy_version": "v6",
+      "reward_variant": "potential"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "BattleCore Heuristic Bot",
+      "deck_id": "deck_kaggle_battlecore",
+      "deck_path": "decks/kaggle_bots/deck_kaggle_battlecore.csv",
+      "feature_variant": "compact",
+      "label": "kaggle_rule_bot_battlecore",
+      "model_path": "src/agents/kaggle_bots/battlecore_agent.py",
+      "policy_family": "rule_based",
+      "policy_version": "v6",
+      "reward_variant": "potential"
+    },
+    {
+      "action_space_size": 66,
+      "archetype": "Alakazam RL 1M",
+      "deck_id": "bank_54",
+      "deck_path": "decks/deck_bank/bank_54.csv",
+      "feature_variant": "compact",
+      "label": "ppo_v6_alakazam_1m_bank_54",
+      "model_path": "models/training_v6/ppo_v6_deck_bank_54_compact_a_newpool_1m_20260717.zip",
       "policy_family": "compact_a",
       "policy_version": "v6",
-      "reward_variant": "potential",
-      "sha256": "f4f14a180e82aaa27da0dbbe0e5318ff8eb3035a6c3d1ad07a4267433d9e230f"
+      "reward_variant": "potential"
     },
     {
       "action_space_size": 66,
-      "archetype": "Dragapult ex",
-      "deck_id": "bank_3",
-      "deck_path": "decks/deck_bank/bank_3.csv",
+      "archetype": "Mewtwo RL League 7M",
+      "deck_id": "bank_38",
+      "deck_path": "decks/deck_bank/bank_38.csv",
       "feature_variant": "compact",
-      "label": "ppo_v6_compact_b_bank_3",
-      "model_path": "models/holdout/v6/ppo_v6_deck_bank_3_compact_b.zip",
-      "policy_family": "compact_b",
-      "policy_version": "v6",
-      "reward_variant": "potential",
-      "sha256": "8d6c5c1d2521319a0d2f75dc8edc0f7ac2dfc36f9800620f55ac995d9a21ccb1"
-    },
-    {
-      "action_space_size": 66,
-      "archetype": "Alakazam",
-      "deck_id": "bank_14",
-      "deck_path": "decks/deck_bank/bank_14.csv",
-      "feature_variant": "compact",
-      "label": "ppo_v6_compact_c_bank_14",
-      "model_path": "models/holdout/v6/ppo_v6_deck_bank_14_compact_c.zip",
-      "policy_family": "compact_c",
-      "policy_version": "v6",
-      "reward_variant": "potential",
-      "sha256": "2c7e0832d3938a7da5edc32b45a5e89519ad15589a21479baa1dc52bc948dc00"
-    },
-    {
-      "action_space_size": 66,
-      "archetype": "Mega Kangaskhan ex",
-      "deck_id": "bank_24",
-      "deck_path": "decks/deck_bank/bank_24.csv",
-      "feature_variant": "compact",
-      "label": "ppo_v6_compact_a_bank_24",
-      "model_path": "models/holdout/v6/ppo_v6_deck_bank_24_compact_a.zip",
+      "label": "ppo_v6_exp016_7m_league_bank_38",
+      "model_path": "models/ppo_v6_exp016_7m_pfsp_league.zip",
       "policy_family": "compact_a",
       "policy_version": "v6",
-      "reward_variant": "potential",
-      "sha256": "ce89b7ee86bf5d1457d51835d780378f6304a47c93fbc535d3e2a7492d761a76"
+      "reward_variant": "potential"
     },
     {
       "action_space_size": 66,
-      "archetype": "Hop's Trevenant",
-      "deck_id": "bank_63",
-      "deck_path": "decks/deck_bank/bank_63.csv",
-      "feature_variant": "compact",
-      "label": "ppo_v6_compact_b_bank_63",
-      "model_path": "models/holdout/v6/ppo_v6_deck_bank_63_compact_b.zip",
-      "policy_family": "compact_b",
-      "policy_version": "v6",
-      "reward_variant": "potential",
-      "sha256": "daa6e9b8a1c0793a285905bfda4901ea21f16254e189beb4d103f1ede22cf342"
-    },
-    {
-      "action_space_size": 66,
-      "archetype": "Hydrapple ex",
+      "archetype": "Hydrapple ex Control",
       "deck_id": "bank_70",
       "deck_path": "decks/deck_bank/bank_70.csv",
       "feature_variant": "compact",
@@ -80,6 +87,6 @@
       "sha256": "8610f36d13f9bcc23af5dc984349cea169f3bbe6689962b4c9b98ca0a72bb3ae"
     }
   ],
-  "purpose": "Untouched final V6 evaluation only; do not inspect during model selection.",
-  "version": 6
+  "purpose": "Balanced Kaggle-aligned evaluation holdout without duplicate deck bias.",
+  "version": 8
 }

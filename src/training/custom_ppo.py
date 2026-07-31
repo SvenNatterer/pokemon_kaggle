@@ -10,6 +10,37 @@ from sb3_contrib.ppo_recurrent.policies import RecurrentMultiInputActorCriticPol
 from sb3_contrib.common.recurrent.type_aliases import RNNStates
 from stable_baselines3.common.utils import explained_variance
 
+
+def hidden_card_auxiliary_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """Return the count-aware hidden-card loss shared by PPO and BC."""
+    if logits.shape != targets.shape:
+        raise ValueError(
+            f"Hidden-card logits/target shape mismatch: {tuple(logits.shape)} != "
+            f"{tuple(targets.shape)}"
+        )
+    present_mask = targets > 0
+    positive_count = present_mask.sum()
+    negative_count = targets.numel() - positive_count
+    positive_weight = torch.clamp(
+        negative_count / torch.clamp(positive_count, min=1.0),
+        min=1.0,
+        max=20.0,
+    )
+    prediction = torch.sigmoid(logits)
+    element_loss = F.smooth_l1_loss(
+        prediction,
+        targets,
+        reduction="none",
+        beta=0.1,
+    )
+    weights = torch.where(
+        present_mask,
+        positive_weight,
+        torch.ones_like(targets),
+    )
+    return (element_loss * weights).sum() / weights.sum().clamp_min(1.0)
+
+
 class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
     def __init__(
         self,
@@ -186,14 +217,37 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         """
         Get the current policy distribution given the observations.
         """
+        distribution, _, _, lstm_states_pi = self.evaluate_behavior_cloning(
+            obs,
+            lstm_states,
+            episode_starts,
+            compute_aux=False,
+        )
+        return distribution, lstm_states_pi
+
+    def evaluate_behavior_cloning(
+        self,
+        obs,
+        lstm_states,
+        episode_starts,
+        *,
+        compute_aux=False,
+    ):
+        """Evaluate a chronological actor sequence for supervised imitation."""
         features = self.extract_features(obs)
         latent_pi, lstm_states_pi = self._process_sequence(features, lstm_states, episode_starts, self.lstm_actor)
         latent_pi_mlp = self.mlp_extractor.forward_actor(latent_pi)
-        latent_pi_mlp, _ = self._actor_latent_with_belief(latent_pi, latent_pi_mlp)
+        latent_pi_mlp, belief_embedding = self._actor_latent_with_belief(latent_pi, latent_pi_mlp)
         
         mean_actions = self._action_logits(obs, latent_pi_mlp)
-            
-        return self.action_dist.proba_distribution(action_logits=mean_actions), lstm_states_pi
+        distribution = self.action_dist.proba_distribution(action_logits=mean_actions)
+
+        aux_logits = None
+        if compute_aux:
+            aux_input = belief_embedding if self.use_belief_actor else latent_pi
+            aux_logits = self.aux_head(aux_input)
+
+        return distribution, mean_actions, aux_logits, lstm_states_pi
 
     def evaluate_actions_with_aux(
         self, obs, actions, lstm_states, episode_starts, compute_aux=True
@@ -229,10 +283,11 @@ class PokemonTCGRecurrentPolicy(RecurrentMultiInputActorCriticPolicy):
         return values, log_prob, entropy, aux_logits, mean_actions
 
 class CustomPPO(RecurrentPPO):
-    def __init__(self, *args, c_aux=0.5, distill_coef=0.1, **kwargs):
+    def __init__(self, *args, c_aux=0.5, distill_coef=0.1, value_distill_coef=0.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.c_aux = c_aux
         self.distill_coef = distill_coef
+        self.value_distill_coef = value_distill_coef
 
     def set_parameters(self, load_path_or_dict, exact_match=True, device="auto"):
         if isinstance(load_path_or_dict, dict):
@@ -276,7 +331,7 @@ class CustomPPO(RecurrentPPO):
         
         entropy_losses = []
         attn_entropies = []
-        pg_losses, value_losses, aux_losses, distill_losses = [], [], [], []
+        pg_losses, value_losses, aux_losses, distill_losses, value_distill_losses = [], [], [], [], []
         aux_precision_at_20, aux_recall_at_20, aux_count_scaled_mae = [], [], []
         clip_fractions = []
 
@@ -364,30 +419,12 @@ class CustomPPO(RecurrentPPO):
                     aux_target = rollout_data.observations['aux_target']
                     valid_aux_logits = aux_logits[mask]
                     valid_aux_target = aux_target[mask]
-                    present_mask = valid_aux_target > 0
-                    positive_count = present_mask.sum()
-                    negative_count = valid_aux_target.numel() - positive_count
-                    positive_weight = torch.clamp(
-                        negative_count / torch.clamp(positive_count, min=1.0),
-                        min=1.0,
-                        max=20.0,
-                    )
-                    aux_prediction = torch.sigmoid(valid_aux_logits)
-                    aux_element_loss = F.smooth_l1_loss(
-                        aux_prediction, valid_aux_target, reduction="none", beta=0.1
-                    )
-                    aux_weights = torch.where(
-                        present_mask,
-                        positive_weight,
-                        torch.ones_like(valid_aux_target),
-                    )
-                    aux_loss = (
-                        (aux_element_loss * aux_weights).sum()
-                        / aux_weights.sum().clamp_min(1.0)
-                    )
+                    aux_loss = hidden_card_auxiliary_loss(valid_aux_logits, valid_aux_target)
                     aux_losses.append(aux_loss.item())
 
                     with torch.no_grad():
+                        present_mask = valid_aux_target > 0
+                        aux_prediction = torch.sigmoid(valid_aux_logits)
                         top_k = min(20, valid_aux_logits.shape[-1])
                         top_indices = torch.topk(valid_aux_logits, k=top_k, dim=-1).indices
                         top_hits = torch.gather(present_mask, 1, top_indices).sum(dim=1)
@@ -402,18 +439,26 @@ class CustomPPO(RecurrentPPO):
                             )
 
                 distill_loss = None
-                if self.distill_coef > 0.0 and "teacher_action" in rollout_data.observations:
+                value_distill_loss = None
+                if "teacher_action" in rollout_data.observations:
                     teacher_actions = rollout_data.observations["teacher_action"].squeeze(-1)
                     valid_teacher_mask = (teacher_actions >= 0) & mask
                     if valid_teacher_mask.any():
-                        distill_loss = F.cross_entropy(action_logits[valid_teacher_mask], teacher_actions[valid_teacher_mask].long())
-                        distill_losses.append(distill_loss.item())
+                        if self.distill_coef > 0.0:
+                            distill_loss = F.cross_entropy(action_logits[valid_teacher_mask], teacher_actions[valid_teacher_mask].long())
+                            distill_losses.append(distill_loss.item())
+                        if self.value_distill_coef > 0.0 and "teacher_value" in rollout_data.observations:
+                            teacher_values = rollout_data.observations["teacher_value"].squeeze(-1)
+                            value_distill_loss = F.mse_loss(values[valid_teacher_mask].flatten(), teacher_values[valid_teacher_mask])
+                            value_distill_losses.append(value_distill_loss.item())
 
                 loss = policy_loss + self.ent_coef * entropy_loss + self.vf_coef * value_loss
                 if aux_loss is not None:
                     loss = loss + self.c_aux * aux_loss
                 if distill_loss is not None:
                     loss = loss + self.distill_coef * distill_loss
+                if value_distill_loss is not None:
+                    loss = loss + self.value_distill_coef * value_distill_loss
 
                 # Calculate approximate form of reverse KL Divergence for early stopping
                 # see issue #417: https://github.com/DLR-RM/stable-baselines3/issues/417
@@ -452,6 +497,7 @@ class CustomPPO(RecurrentPPO):
         self.logger.record("train/value_loss", np.mean(value_losses))
         self.logger.record("train/aux_loss", np.mean(aux_losses) if aux_losses else 0.0)
         self.logger.record("train/distill_loss", np.mean(distill_losses) if distill_losses else 0.0)
+        self.logger.record("train/value_distill_loss", np.mean(value_distill_losses) if value_distill_losses else 0.0)
         self.logger.record(
             "train/aux_precision_at_20",
             np.mean(aux_precision_at_20) if aux_precision_at_20 else 0.0,

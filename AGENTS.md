@@ -23,7 +23,8 @@ Keep the project clearly organized:
 ## Experimentation Rules
 
 When starting, modifying, or running any new experiment:
-- Always document the experiment in `docs/experiment_log.md` (hypothesis, config, Git commit/branch, rollback steps).
+- Always document the experiment in `docs/experiment_log.md` (hypothesis, config, Git commit/branch, rollback steps, stable Elo).
+- Always include a stable Elo rating/evaluation with every commit.
 - Ensure code changes are isolated to git branches or dedicated config files so they can be easily reverted.
 - Update `docs/experiment_log.md` with the final status (`Adopted` or `Reverted`).
 

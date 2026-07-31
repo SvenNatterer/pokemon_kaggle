@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
+from src.cg.api import Option, OptionType
 from src.models.inference_guardrails import (
     FIGHTING_ENERGY_TYPE,
     InferenceGuardrails,
@@ -71,7 +72,13 @@ def _observation(
             players=players,
         ),
         select=SimpleNamespace(
-            option=[SimpleNamespace(attackId=attack_id) for attack_id in attack_ids],
+            option=[
+                Option(
+                    type=OptionType.ATTACK if attack_id is not None else OptionType.END,
+                    attackId=attack_id,
+                )
+                for attack_id in attack_ids
+            ],
             minCount=min_count,
             maxCount=1,
         ),
@@ -104,6 +111,29 @@ class InferenceGuardrailTests(unittest.TestCase):
             "powerful_hand_blocked_by_mist_energy",
             interventions[0].rule,
         )
+        metrics = guardrails.metrics_snapshot()
+        self.assertEqual(1.0, metrics["proposals_total"])
+        self.assertEqual(1.0, metrics["accepted_total"])
+        self.assertEqual(
+            1.0,
+            metrics["by_rule"]["powerful_hand_blocked_by_mist_energy"],
+        )
+
+    def test_shadow_mode_records_proposal_without_changing_mask(self):
+        guardrails = InferenceGuardrails(mode="shadow")
+        obs = _observation(
+            target=_pokemon(20, energy_card_ids=(MIST_ENERGY_CARD_ID,)),
+        )
+        encoded = _encoded()
+
+        guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
+
+        self.assertIs(guarded, encoded)
+        self.assertEqual([], interventions)
+        metrics = guardrails.metrics_snapshot()
+        self.assertEqual(1.0, metrics["proposals_total"])
+        self.assertEqual(0.0, metrics["accepted_total"])
+        self.assertEqual(1.0, metrics["shadow_total"])
 
     def test_mist_energy_does_not_mask_other_attacks(self):
         guardrails = InferenceGuardrails()
@@ -157,6 +187,21 @@ class InferenceGuardrailTests(unittest.TestCase):
         self.assertEqual([1, 1, 0], guarded["action_mask"].tolist())
         self.assertEqual([], interventions)
 
+    def test_production_option_contract_works_for_player_one_perspective(self):
+        guardrails = InferenceGuardrails()
+        obs = _observation(target=_pokemon(20), actor=1)
+        obs.current.players[0].active = [
+            _pokemon(10, energy_card_ids=(MIST_ENERGY_CARD_ID,))
+        ]
+
+        guarded, interventions = guardrails.apply(obs, _encoded(), perspective=1)
+
+        self.assertEqual([0, 1, 0], guarded["action_mask"].tolist())
+        self.assertEqual(
+            "powerful_hand_blocked_by_mist_energy",
+            interventions[0].rule,
+        )
+
     def test_repelling_veil_masks_powerful_hand_against_articuno_itself(self):
         guardrails = InferenceGuardrails()
         guardrails.set_basic_team_rocket_card_ids({TEAM_ROCKET_ARTICUNO_CARD_ID})
@@ -207,7 +252,7 @@ class InferenceGuardrailTests(unittest.TestCase):
         self.assertEqual([1, 1, 0], guarded["action_mask"].tolist())
         self.assertEqual([], interventions)
 
-    def test_guaranteed_lethal_win_override(self):
+    def test_synthetic_lethal_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.select.option = [
@@ -218,11 +263,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("guaranteed_lethal_win_override", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_prevent_self_ko(self):
+    def test_synthetic_recoil_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.current.players[0].active[0].hp = 30
@@ -234,11 +278,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("prevent_self_ko", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_empty_deck_search(self):
+    def test_synthetic_search_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.current.players[0].deckCount = 0
@@ -250,11 +293,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("empty_deck_search", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_wasted_energy_attachment(self):
+    def test_synthetic_wasted_attach_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.select.option = [
@@ -265,11 +307,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("wasted_energy_attachment", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_discard_draw_sequence(self):
+    def test_synthetic_sequence_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.select.option = [
@@ -280,11 +321,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("discard_draw_sequence", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_bench_clogging_protection(self):
+    def test_synthetic_bench_priority_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.current.players[0].bench = [_pokemon(30), _pokemon(31)]
@@ -297,11 +337,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("bench_clogging_protection", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_zero_effect_item_filter(self):
+    def test_synthetic_recycle_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.current.players[0].discardCount = 0
@@ -314,11 +353,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("zero_effect_item_filter", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_prevent_suicidal_deckout(self):
+    def test_synthetic_draw_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.current.players[0].deckCount = 3
@@ -330,11 +368,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("prevent_suicidal_deckout", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_sole_wincon_discard_protection(self):
+    def test_synthetic_win_condition_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.select.option = [
@@ -345,11 +382,10 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("sole_wincon_discard_protection", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
-    def test_lethal_energy_priority(self):
+    def test_synthetic_energy_priority_hint_does_not_hard_mask(self):
         guardrails = InferenceGuardrails()
         obs = _observation(target=_pokemon(20))
         obs.select.option = [
@@ -360,9 +396,8 @@ class InferenceGuardrailTests(unittest.TestCase):
 
         guarded, interventions = guardrails.apply(obs, encoded, perspective=0)
 
-        self.assertEqual([0, 1], guarded["action_mask"].tolist())
-        self.assertEqual(1, len(interventions))
-        self.assertEqual("lethal_energy_priority", interventions[0].rule)
+        self.assertEqual([1, 1], guarded["action_mask"].tolist())
+        self.assertEqual([], interventions)
 
 
 class _FixedRng:
@@ -478,6 +513,23 @@ class SampledSearchGuardrailTests(unittest.TestCase):
         self.assertEqual(1, guardrails.failure_count)
         self.assertIn("search failed", guardrails.last_error)
 
+    def test_episode_reset_preserves_lifetime_search_metrics(self):
+        guardrails = SampledSearchGuardrails(sample_rate=0.075)
+        obs = _observation(target=_pokemon(20, hp=100))
+
+        with patch("src.cg.api.search_begin", side_effect=RuntimeError("search failed")):
+            guardrails.apply(
+                obs,
+                _encoded(),
+                perspective=0,
+                rng=_FixedRng(0.01),
+            )
+        guardrails.reset()
+
+        metrics = guardrails.metrics_snapshot()
+        self.assertEqual(1.0, metrics["decisions_total"])
+        self.assertEqual(1.0, metrics["search_failures_total"])
+
 
 class InferenceGuardrailStateTests(unittest.TestCase):
     def test_splashing_dodge_heads_persists_for_the_protected_turn(self):
@@ -555,16 +607,45 @@ class InferenceGuardrailStateTests(unittest.TestCase):
         self.assertIs(guarded, encoded)
         self.assertEqual([1, 0, 0], guarded["action_mask"].tolist())
         self.assertEqual([], interventions)
+        metrics = guardrails.metrics_snapshot()
+        self.assertEqual(1.0, metrics["proposals_total"])
+        self.assertEqual(1.0, metrics["rolled_back_total"])
+        self.assertEqual(0.0, metrics["accepted_total"])
 
 
 class PokemonTCGEnvGuardrailIntegrationTests(unittest.TestCase):
     def test_env_guardrails_integration_and_metrics(self):
-        deck = [1] * 60
+        deck = np.loadtxt(
+            "decks/deck_bank/bank_38.csv", delimiter=",", dtype=np.int64
+        ).reshape(-1).tolist()
         env = PokemonTCGEnv(deck, deck, inference_guardrails=True)
         self.assertIsNotNone(env.inference_guardrail)
+        self.assertTrue(env.inference_guardrail._card_energy_types)
+        self.assertTrue(env.inference_guardrail._basic_team_rocket_card_ids)
+        env.reset()
+        with patch.object(
+            env.inference_guardrail,
+            "apply",
+            wraps=env.inference_guardrail.apply,
+        ) as apply_guardrails:
+            env._get_obs_cpp(perspective=env.learner_perspective)
+        apply_guardrails.assert_called_once()
+        opponent_observation = {"action_mask": np.ones(2, dtype=np.int8)}
+        with patch.object(env.inference_guardrail, "apply") as opponent_apply:
+            returned = env._apply_guardrails_to_observation(
+                SimpleNamespace(),
+                opponent_observation,
+                perspective=1 - env.learner_perspective,
+                pending_selection=(),
+            )
+        self.assertIs(returned, opponent_observation)
+        opponent_apply.assert_not_called()
         metrics = env.get_guardrail_metrics()
         self.assertIn("total_interventions", metrics)
         self.assertEqual(metrics["total_interventions"], 0.0)
+        self.assertIn("known_rules", metrics)
+        self.assertIn("powerful_hand_blocked_by_mist_energy", metrics["known_rules"])
+        env.close()
 
 
 if __name__ == "__main__":

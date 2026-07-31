@@ -169,14 +169,16 @@ def generate_replay_batch(
         pool_file = Path(pool_path)
         print(f"Loading opponent pool from {pool_file}...")
         pool_data = json.loads(pool_file.read_text(encoding="utf-8"))
-        if isinstance(pool_data, list):
-            for idx, bot in enumerate(pool_data, start=1):
-                label = bot.get("label", f"bot_{idx}")
-                opponents.append({
-                    "label": label,
-                    "model": bot.get("model", ""),
-                    "deck": bot.get("deck", ""),
-                })
+        bot_list = pool_data if isinstance(pool_data, list) else pool_data.get("opponents", [])
+        for idx, bot in enumerate(bot_list, start=1):
+            label = bot.get("label", f"bot_{idx}")
+            opp_model = bot.get("model_path") or bot.get("model", "")
+            opp_deck = bot.get("deck_path") or bot.get("deck", "")
+            opponents.append({
+                "label": label,
+                "model": opp_model,
+                "deck": opp_deck,
+            })
     elif model_b_path or deck_b_path:
         opponents.append({
             "label": "opponent",
@@ -194,13 +196,13 @@ def generate_replay_batch(
                 d_file = deck_files[i % len(deck_files)]
                 opponents.append({
                     "label": d_file.stem,
-                    "model": "rule_based:random",
+                    "model": "rule_based:balanced",
                     "deck": str(d_file),
                 })
         else:
             opponents.append({
-                "label": "random_bot",
-                "model": "rule_based:random",
+                "label": "balanced_bot",
+                "model": "rule_based:balanced",
                 "deck": deck_a_path,
             })
 

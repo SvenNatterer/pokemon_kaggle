@@ -1,4 +1,5 @@
 import json
+from dataclasses import MISSING
 
 
 def to_dataclass(dic: dict, cls: type):
@@ -37,9 +38,25 @@ def to_dataclass(dic: dict, cls: type):
                 if not hasattr(c, "__dataclass_fields__"):
                     d[key] = value
                 else:
-                    d[key] = [to_dataclass(v, c) for v in value]
+                    d[key] = [to_dataclass(v, c) if isinstance(v, dict) else v for v in value]
             else:
                 d[key] = value
+
+    for f_name, field in cls.__dataclass_fields__.items():
+        if f_name not in d:
+            if field.default is not MISSING or field.default_factory is not MISSING:
+                continue
+            origin = getattr(field.type, "__origin__", None)
+            if origin is list or field.type is list:
+                d[f_name] = []
+            elif field.type in (int, float):
+                d[f_name] = 0
+            elif field.type is bool:
+                d[f_name] = False
+            elif field.type is str:
+                d[f_name] = ""
+            else:
+                d[f_name] = None
 
     return cls(**d)
 

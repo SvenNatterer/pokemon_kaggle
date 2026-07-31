@@ -204,7 +204,79 @@
       "description": "EXP-016 7M PFSP League + Inference-Time Lookahead Search - Submission #2",
       "file_name": "submission_exp016_7m_lookahead_2.tar.gz",
       "status": "COMPLETE"
+    },
+    "55102866": {
+      "date": "2026-07-30T07:29:06.907000",
+      "description": "Official Kaggle Rule-Based Mega Lucario ex Bot",
+      "file_name": "submission_rule_based_lucario.tar.gz",
+      "status": "ERROR"
+    },
+    "55103760": {
+      "date": "2026-07-30T08:14:26.733000",
+      "description": "Rule-Based Mega Lucario ex Bot (Fixed Dataclass Parsing & Fallback)",
+      "file_name": "submission_rule_based_lucario.tar.gz",
+      "status": "ERROR"
+    },
+    "55104037": {
+      "date": "2026-07-30T08:28:30.270000",
+      "description": "EXP-016 7M PFSP League \u2014 exact checkpoint, no inference-time lookahead",
+      "file_name": "submission_exp016_7m_no_lookahead_20260730.tar.gz",
+      "status": "COMPLETE"
+    },
+    "55104086": {
+      "date": "2026-07-30T08:31:22.670000",
+      "description": "Official Kaggle Mega Lucario ex rule-based bot \u2014 verified package",
+      "file_name": "submission_rule_based_lucario_20260730.tar.gz",
+      "status": "ERROR"
+    },
+    "55104233": {
+      "date": "2026-07-30T08:37:57.930000",
+      "description": "Official Kaggle Mega Lucario ex rule-based bot \u2014 standalone entrypoint fix",
+      "file_name": "submission_rule_based_lucario_standalone_20260730.tar.gz",
+      "status": "ERROR"
+    },
+    "55104361": {
+      "date": "2026-07-30T08:43:45.820000",
+      "description": "Official Kaggle Mega Lucario ex rule bot \u2014 minimal API-only package",
+      "file_name": "submission_rule_based_lucario_minimal_20260730.tar.gz",
+      "status": "COMPLETE"
+    },
+    "55105079": {
+      "date": "2026-07-30T09:16:40.080000",
+      "description": "EXP-014 2M entity attention + gameplan guardrails \u2014 no inference-time lookahead",
+      "file_name": "submission_exp014_2m_no_lookahead_20260730.tar.gz",
+      "status": "COMPLETE"
+    },
+    "55107770": {
+      "date": "2026-07-30T11:35:48.930000",
+      "description": "EXP-024 Warmstart BC model",
+      "file_name": "exp024_warmstart_submission.tar.gz",
+      "status": "COMPLETE"
+    },
+    "55112108": {
+      "date": "2026-07-30T14:45:01.477000",
+      "description": "EXP-025 strategic-vector Alakazam warm-start checkpoint (latest 2026-07-30)",
+      "file_name": "submission_v6_exp025_warmstart_alakazam_20260730.tar.gz",
+      "status": "COMPLETE"
+    },
+    "55128804": {
+      "date": "2026-07-31T06:03:25.737000",
+      "description": "EXP-028 strategic-vector V3 Alakazam PPO 4M continuation (2026-07-31)",
+      "file_name": "submission_v6_exp028_strategic_vector_v3_alakazam_4m_20260731.tar.gz",
+      "status": "COMPLETE"
+    },
+    "55136598": {
+      "date": "2026-07-31T12:07:12.290000",
+      "description": "Rule-Based BattleCore (Archaludon ex + Cinderace)",
+      "file_name": "submission_rule_based_battlecore.tar.gz",
+      "status": "COMPLETE"
+    },
+    "55136610": {
+      "date": "2026-07-31T12:07:47.097000",
+      "description": "EXP-030 Grimmsnarl ex (2M timesteps, deckout reward)",
+      "file_name": "submission_exp030_grimmsnarl_2m.tar.gz",
+      "status": "COMPLETE"
     }
   },
-  "updated_at": "2026-07-24T07:12:12.072859+00:00"
+  "updated_at": "2026-07-31T12:26:44.756538+00:00"
 }

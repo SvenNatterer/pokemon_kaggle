@@ -21,8 +21,11 @@ from src.agents.rule_based_agent import is_rule_based_model_spec
 from src.utils import deck_display_name_for_path, model_display_name_for_path, resolve_deck_path, resolve_pool_path
 from src.league.experiment_registry import git_revision, registry_path, write_experiment
 from src.training.training_health import FeatureMetricsCallback, GuardrailMetricsCallback
+from src.league.pfsp import PFSPLite, labels_and_weights
+from src.evaluation.checkpoint_evaluation import evaluate_checkpoint
 
 TRAINING_USES_POTENTIAL_REWARDS = True
+DEFAULT_TRAINING_POOL = "decks/pools/default_training.json"
 
 class LiveStatusCallback(BaseCallback):
     def __init__(self, action_text, total_timesteps, status_freq=10000, verbose=0):
@@ -57,6 +60,7 @@ class RewardBreakdownCallback(BaseCallback):
         super().__init__(verbose)
         from collections import deque, defaultdict
         self.episode_rewards = defaultdict(lambda: deque(maxlen=100))
+        self.episode_outcomes = deque(maxlen=100)
 
     def _on_step(self) -> bool:
         dones = self.locals.get("dones", [])
@@ -70,6 +74,14 @@ class RewardBreakdownCallback(BaseCallback):
                 if "reward_breakdown" in terminal_info:
                     for key, val in terminal_info["reward_breakdown"].items():
                         self.episode_rewards[key].append(val)
+                try:
+                    winner = int(terminal_info.get("winner", -1))
+                    learner_perspective = int(terminal_info.get("learner_perspective", -1))
+                except (TypeError, ValueError):
+                    winner = -1
+                    learner_perspective = -1
+                if winner in (0, 1) and learner_perspective in (0, 1):
+                    self.episode_outcomes.append(float(winner == learner_perspective))
         return True
 
     def _on_rollout_end(self) -> None:
@@ -84,20 +96,142 @@ class RewardBreakdownCallback(BaseCallback):
             vals = self.episode_rewards.get(k, [])
             mean_val = float(sum(vals) / len(vals)) if len(vals) > 0 else 0.0
             self.logger.record(f"rewards/{k}", mean_val)
-        if hasattr(self.model, "ep_info_buffer") and len(self.model.ep_info_buffer) > 0:
-            ep_rewards = [ep_info["r"] for ep_info in self.model.ep_info_buffer]
-            self.logger.record("rollout/ep_rew_max", max(ep_rewards))
-            self.logger.record("rollout/ep_rew_min", min(ep_rewards))
-            wins = sum(1 for ep in self.model.ep_info_buffer if ep.get("r", 0) > 0)
-            self.logger.record("rollout/win_rate", wins / len(self.model.ep_info_buffer))
-        elif "prize_win" in self.episode_rewards and len(self.episode_rewards["prize_win"]) > 0:
-            wins = sum(1 for v in self.episode_rewards["prize_win"] if v > 0)
-            self.logger.record("rollout/win_rate", wins / len(self.episode_rewards["prize_win"]))
+        if self.episode_outcomes:
+            self.logger.record(
+                "rollout/win_rate",
+                sum(self.episode_outcomes) / len(self.episode_outcomes),
+            )
+
+
+class PFSPCallback(BaseCallback):
+    """Reweight opponents from recent outcomes and log each probability."""
+
+    def __init__(self, opponent_pool, update_steps=250_000, window_games=150, verbose=0):
+        super().__init__(verbose)
+        labels, weights = labels_and_weights(opponent_pool)
+        self.opponent_pool = opponent_pool
+        self.controller = PFSPLite(
+            labels,
+            weights,
+            random_fraction=0.20,
+            max_probability=0.18,
+            window_games=window_games,
+            minimum_games=25,
+        )
+        self.update_steps = max(1, int(update_steps))
+        self.next_update = self.update_steps
+
+    def _record_pool_metrics(self) -> None:
+        probability_by_label = dict(
+            zip(self.controller.labels, self.controller.current_probabilities)
+        )
+        for label, probability in probability_by_label.items():
+            self.logger.record(f"pfsp/probability/{label}", probability)
+
+        macro_win_rate = self.controller.recent_macro_win_rate()
+        if macro_win_rate is not None:
+            self.logger.record("train/pfsp_macro_win_rate", macro_win_rate)
+        worst_win_rate = self.controller.recent_worst_win_rate()
+        if worst_win_rate is not None:
+            self.logger.record("train/pfsp_worst_win_rate", worst_win_rate)
+            self.logger.record("rollout/min_win_rate", worst_win_rate)
+        self.logger.record(
+            "train/pfsp_effective_opponent_count",
+            self.controller.effective_opponent_count(),
+        )
+
+    def _on_training_start(self) -> None:
+        # Make the complete initial pool visible in W&B before the first 250k-step
+        # PFSP reweighting event.
+        self._record_pool_metrics()
+
+    def _on_rollout_end(self) -> None:
+        # Keep the multi-line pool plot and current weakest matchup live between
+        # reweighting events, not just at PFSP boundaries.
+        self._record_pool_metrics()
+
+    def _on_step(self) -> bool:
+        for done, info in zip(self.locals.get("dones", []), self.locals.get("infos", [])):
+            if not done:
+                continue
+            terminal = info.get("terminal_info", info)
+            label = terminal.get("opponent_label")
+            try:
+                winner = int(terminal.get("winner", -1))
+                learner = int(terminal.get("learner_perspective", -1))
+            except (TypeError, ValueError):
+                continue
+            outcome = 1 if winner == learner else (-1 if winner in (0, 1) else 0)
+            self.controller.observe(str(label), outcome)
+
+        if self.num_timesteps < self.next_update or self.controller.segment_games == 0:
+            return True
+        segment_score = sum(
+            record.effective_wins for record in self.controller.segment_records.values()
+        ) / self.controller.segment_games
+        probabilities, segment = self.controller.finish_segment()
+        probability_by_label = dict(zip(self.controller.labels, probabilities))
+        self.training_env.env_method("set_opponent_probabilities", probability_by_label)
+        for entry in self.opponent_pool:
+            entry["weight"] = probability_by_label[str(entry["label"])]
+        self.logger.record("pfsp/segment_games", segment["games"])
+        self.logger.record("train/pfsp_weighted_win_rate", segment_score)
+        self._record_pool_metrics()
+        self.next_update = ((self.num_timesteps // self.update_steps) + 1) * self.update_steps
+        return True
+
+
+class CheckpointEvaluationCallback(BaseCallback):
+    """Save immutable checkpoints and evaluate only validation and holdout pools."""
+
+    def __init__(self, *, model_path, deck_path, opponent_pool, interval_steps, games_per_opponent, verbose=0):
+        super().__init__(verbose)
+        self.model_path = Path(model_path)
+        self.deck_path = str(deck_path)
+        self.opponent_pool = opponent_pool
+        self.interval_steps = max(1, int(interval_steps))
+        self.games_per_opponent = max(1, int(games_per_opponent))
+        self.next_checkpoint = self.interval_steps
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps < self.next_checkpoint:
+            return True
+        checkpoint_dir = self.model_path.parent / "checkpoints"
+        checkpoint_path = checkpoint_dir / f"{self.model_path.stem}_{self.num_timesteps}.zip"
+        save_model_atomically(self.model, checkpoint_path)
+        report_path = Path("evaluation_results") / "checkpoints" / f"{checkpoint_path.stem}.json"
+        report = evaluate_checkpoint(
+            candidate_model=str(checkpoint_path),
+            candidate_deck=self.deck_path,
+            validation_manifest="decks/pools/validation_opponents.json",
+            holdout_manifest="decks/pools/holdout_opponents.json",
+            games_per_opponent=self.games_per_opponent,
+            output_path=report_path,
+            global_steps=self.num_timesteps,
+            training_pool=self.opponent_pool,
+        )
+        for pool_name in ("validation", "holdout"):
+            summary = report[pool_name]
+            self.logger.record(f"checkpoint/{pool_name}/macro_win_rate", summary["macro_win_rate"])
+            self.logger.record(f"checkpoint/{pool_name}/micro_win_rate", summary["micro_win_rate"])
+            self.logger.record(f"checkpoint/{pool_name}/worst_win_rate", summary["worst_win_rate"])
+            self.logger.record(
+                f"checkpoint/{pool_name}/worst_wilson_lower_bound_95",
+                summary["worst_wilson_lower_bound_95"],
+            )
+            for opponent in summary["opponents"]:
+                self.logger.record(
+                    f"checkpoint/{pool_name}/win_rate/{opponent['label']}", opponent["win_rate"]
+                )
+        self.logger.record("checkpoint/global_steps", self.num_timesteps)
+        self.next_checkpoint = ((self.num_timesteps // self.interval_steps) + 1) * self.interval_steps
+        return True
 
 from stable_baselines3.common.monitor import Monitor
 from src.env.env_wrapper import LEGACY_ACTION_SPACE_SIZE, V6_ACTION_SPACE_SIZE, PokemonTCGEnv
 from src.training.training_health import TrainingHealthCallback, summarize_health, health_gate
-from src.training.custom_ppo import CustomPPO, PokemonTCGRecurrentPolicy
+from src.training.custom_ppo import CustomPPO
+from src.training.model_factory import build_fresh_custom_ppo, save_model_atomically
 
 def read_deck(deck_path):
     resolved = resolve_deck_path(deck_path)
@@ -117,17 +251,7 @@ def resolve_model_path(model_name):
 
 def save_final_model_atomically(model, model_path):
     """Save exactly one final target model without exposing a partial ZIP."""
-    directory = os.path.dirname(model_path) or "."
-    os.makedirs(directory, exist_ok=True)
-    temporary_base = os.path.join(directory, f".{os.path.basename(model_path)}.training-{os.getpid()}")
-    temporary_zip = f"{temporary_base}.zip"
-    save_model = False
-    try:
-        model.save(temporary_zip)
-        os.replace(temporary_zip, f"{model_path}.zip")
-    finally:
-        if os.path.exists(temporary_zip):
-            os.unlink(temporary_zip)
+    save_model_atomically(model, f"{model_path}.zip")
 
 
 def validate_policy_action_space(model, expected_size, policy_version):
@@ -175,10 +299,14 @@ def make_env(
     rotate_perspective=False,
     action_space_size=V6_ACTION_SPACE_SIZE,
     structured_v2=True,
+    feature_variant="compact",
     enable_lookahead_teacher=False,
     teacher_sample_rate=0.50,
     inference_guardrails=False,
+    inference_guardrail_mode="active",
     search_guardrail_rate=0.0,
+    lookahead_config=None,
+    enable_archetype_prediction=True,
 ):
     def _init():
         import torch
@@ -195,10 +323,14 @@ def make_env(
             rotate_perspective=rotate_perspective,
             action_space_size=action_space_size,
             structured_v2=structured_v2,
+            feature_variant=feature_variant,
             enable_lookahead_teacher=enable_lookahead_teacher,
             teacher_sample_rate=teacher_sample_rate,
             inference_guardrails=inference_guardrails,
+            inference_guardrail_mode=inference_guardrail_mode,
             search_guardrail_rate=search_guardrail_rate,
+            lookahead_config=lookahead_config,
+            enable_archetype_prediction=enable_archetype_prediction,
         )
         return Monitor(env)
     return _init
@@ -265,40 +397,51 @@ def pop_next_queue_item(queue_path: str) -> Any:
     return item
 
 
+CONFIG_ARG_MAPPING = {
+    "learning_rate": "lr",
+    "lr": "lr",
+    "deck": "deck",
+    "model_name": "model_name",
+    "model": "model_name",
+    "timesteps": "timesteps",
+    "total_timesteps": "timesteps",
+    "n_steps": "n_steps",
+    "batch_size": "batch_size",
+    "n_epochs": "n_epochs",
+    "ent_coef": "ent_coef",
+    "clip_range": "clip_range",
+    "target_kl": "target_kl",
+    "aux_coef": "aux_coef",
+    "distill_coef": "distill_coef",
+    "value_distill_coef": "value_distill_coef",
+    "teacher_sample_rate": "teacher_sample_rate",
+    "base_model": "base_model",
+    "opp_pool": "opp_pool",
+    "opp_deck": "opp_deck",
+    "opp_model": "opp_model",
+    "seed": "seed",
+    "sparse_rewards": "sparse_rewards",
+    "endless": "endless",
+    "features_dim": "features_dim",
+    "hidden_dim": "hidden_dim",
+    "num_envs": "num_envs",
+    "entity_relation_mode": "entity_relation_mode",
+    "wandb_mode": "wandb_mode",
+    "inference_guardrail_mode": "inference_guardrail_mode",
+    "lookahead": "lookahead_config",
+    "archetype_prediction": "enable_archetype_prediction",
+}
+
+
 def apply_config_dict(args: argparse.Namespace, config_dict: dict) -> None:
-    mapping = {
-        "learning_rate": "lr",
-        "lr": "lr",
-        "deck": "deck",
-        "model_name": "model_name",
-        "model": "model_name",
-        "timesteps": "timesteps",
-        "total_timesteps": "timesteps",
-        "n_steps": "n_steps",
-        "batch_size": "batch_size",
-        "n_epochs": "n_epochs",
-        "ent_coef": "ent_coef",
-        "clip_range": "clip_range",
-        "target_kl": "target_kl",
-        "aux_coef": "aux_coef",
-        "distill_coef": "distill_coef",
-        "teacher_sample_rate": "teacher_sample_rate",
-        "base_model": "base_model",
-        "opp_pool": "opp_pool",
-        "opp_deck": "opp_deck",
-        "opp_model": "opp_model",
-        "seed": "seed",
-        "sparse_rewards": "sparse_rewards",
-        "endless": "endless",
-        "features_dim": "features_dim",
-        "hidden_dim": "hidden_dim",
-        "num_envs": "num_envs",
-    }
     for k, v in config_dict.items():
         if k == "rewards":
             setattr(args, "reward_config", v)
-        elif k in mapping:
-            setattr(args, mapping[k], v)
+        elif k == "features" and isinstance(v, dict):
+            if "archetype_prediction" in v:
+                setattr(args, "enable_archetype_prediction", bool(v["archetype_prediction"]))
+        elif k in CONFIG_ARG_MAPPING:
+            setattr(args, CONFIG_ARG_MAPPING[k], v)
         elif hasattr(args, k):
             setattr(args, k, v)
 
@@ -318,7 +461,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-model", type=str, default=None, help="Path to base model checkpoint to load weights from before training.")
     parser.add_argument("--opp-deck", type=str, help="Path to opponent deck.csv", default=None)
     parser.add_argument("--opp-model", type=str, help="Path to opponent model .zip", default=None)
-    parser.add_argument("--opp-pool", type=str, default=None, help="JSON list of weighted opponent deck/model entries sampled per episode")
+    parser.add_argument("--opp-pool", type=str, default=DEFAULT_TRAINING_POOL, help="JSON list of weighted opponent deck/model entries sampled per episode")
     parser.add_argument("--sparse-rewards", action="store_true", help="Use sparse rewards (+1 for win, -1 for loss)")
     parser.add_argument("--num-envs", type=int, default=7, help="Number of parallel environments (default: 7)")
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
@@ -330,6 +473,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--n-steps", type=int, default=2048, help="Steps per env per rollout")
     parser.add_argument("--aux-coef", type=float, default=0.1, help="Weight for hidden-card count auxiliary loss")
     parser.add_argument("--distill-coef", type=float, default=0.1, help="Weight for policy distillation loss")
+    parser.add_argument("--value-distill-coef", type=float, default=0.0, help="Weight for value distillation loss")
     parser.add_argument("--enable-lookahead-teacher", action="store_true", default=True, help="Enable lookahead teacher sampling")
     parser.add_argument("--no-lookahead-teacher", dest="enable_lookahead_teacher", action="store_false")
     parser.add_argument("--teacher-sample-rate", type=float, default=0.50, help="Sampling rate for lookahead teacher on complex decisions")
@@ -339,6 +483,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-rotate-perspective", dest="rotate_perspective", action="store_false", help="Disable random perspective rotation")
     parser.add_argument("--features-dim", type=int, default=256, help="Dimension of feature extractor output")
     parser.add_argument("--hidden-dim", type=int, default=128, help="Hidden dimension for policy MLP/LSTM layers")
+    parser.add_argument(
+        "--entity-relation-mode",
+        choices=("baseline", "masked", "relational", "two_step", "python_object_relational"),
+        default="baseline",
+        help=(
+            "Entity encoder mode: baseline, masked, relational, two-step relational, "
+            "or the EXP-023 Python-object relational ablation."
+        ),
+    )
+    parser.add_argument(
+        "--wandb-mode",
+        choices=("online", "offline", "disabled"),
+        default="online",
+        help="Weights & Biases tracking mode (default: online).",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Policy and vector-environment seed for reproducible experiment families")
     parser.add_argument(
         "--policy-version",
@@ -348,9 +507,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--feature-variant",
-        choices=("compact",),
+        choices=("compact", "strategic_vector_v1", "strategic_vector_v2", "strategic_vector_v3"),
         default="compact",
-        help="Structured V6 Compact feature width.",
+        help="Observation encoder family: structured compact V2 or strategic scalar vector v1/v2.",
     )
     parser.add_argument(
         "--no-card-table",
@@ -375,6 +534,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Disable inference guardrails.",
     )
     parser.add_argument(
+        "--inference-guardrail-mode",
+        choices=("off", "shadow", "active"),
+        default="active",
+        help="Guardrail execution mode: off, shadow telemetry, or active masking.",
+    )
+    parser.add_argument(
         "--adaptive-stop",
         action="store_true",
         help="Enable adaptive stopping.",
@@ -385,6 +550,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Disable PFSP-Lite.",
     )
+    parser.add_argument("--pfsp-update-steps", type=int, default=250000, help="Training steps between PFSP opponent reweights.")
+    parser.add_argument("--pfsp-window-games", type=int, default=150, help="Recent games retained per opponent for PFSP.")
+    parser.add_argument("--checkpoint-eval-steps", type=int, default=250000, help="Training steps between saved checkpoint evaluations.")
+    parser.add_argument("--checkpoint-eval-games-per-opponent", type=int, default=50, help="Validation and holdout games per opponent for each checkpoint.")
     parser.add_argument(
         "--search-guardrail-rate",
         type=float,
@@ -410,14 +579,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=int(os.getenv("TORCH_THREADS", "2")),
         help="Number of PyTorch CPU threads for main process (default: 2 for Daytime mode, 0 for Nighttime/full speed).",
     )
+    parser.add_argument(
+        "--no-archetype-prediction",
+        dest="enable_archetype_prediction",
+        action="store_false",
+        help="Disable opponent archetype prediction feature metric updates.",
+    )
+    parser.add_argument(
+        "--no-extra-metrics",
+        dest="extra_metrics",
+        action="store_false",
+        help="Disable extra guardrail/feature telemetry callbacks.",
+    )
     parser.set_defaults(
         belief_actor=True,
         belief_detach=True,
         card_table=True,
+        extra_metrics=True,
         inference_guardrails=True,
         rotate_perspective=True,
         pfsp_lite=True,
         health_gate=True,
+        enable_archetype_prediction=True,
     )
     return parser
 
@@ -435,11 +618,16 @@ def parse_args_with_config(argv: list[str] | None = None, parser: argparse.Argum
                     flag = tok.lstrip("-").split("=")[0].replace("-", "_")
                     cli_supplied.add(flag)
         for k, v in yaml_dict.items():
-            mapped_key = "lr" if k in ("learning_rate", "lr") else ("model_name" if k in ("model", "model_name") else ("timesteps" if k in ("total_timesteps", "timesteps") else k))
-            if mapped_key not in cli_supplied and hasattr(args, mapped_key):
+            mapped_key = CONFIG_ARG_MAPPING.get(k, k)
+            if mapped_key not in cli_supplied and (
+                hasattr(args, mapped_key) or k in CONFIG_ARG_MAPPING
+            ):
                 setattr(args, mapped_key, v)
         if "rewards" in yaml_dict and not getattr(args, "reward_config", None):
             setattr(args, "reward_config", yaml_dict["rewards"])
+        if "features" in yaml_dict and isinstance(yaml_dict["features"], dict):
+            if "archetype_prediction" in yaml_dict["features"]:
+                setattr(args, "enable_archetype_prediction", bool(yaml_dict["features"]["archetype_prediction"]))
 
     # Defaults for deck and model_name if missing
     if not args.deck:
@@ -479,6 +667,9 @@ def parse_queue_item(item: Any, parser: argparse.ArgumentParser) -> argparse.Nam
 
 
 def run_single_training(args: argparse.Namespace) -> None:
+    # Keep online experiment tracking the default even when a parent shell has
+    # a stale WANDB_MODE setting. Offline/disabled operation remains explicit.
+    os.environ["WANDB_MODE"] = args.wandb_mode
     torch_threads = getattr(args, "torch_threads", 2)
     if torch_threads is not None and torch_threads > 0:
         import torch
@@ -517,10 +708,14 @@ def run_single_training(args: argparse.Namespace) -> None:
             rotate_perspective=args.rotate_perspective,
             action_space_size=action_space_size,
             structured_v2=not args.scalar_obs,
+            feature_variant=args.feature_variant,
             enable_lookahead_teacher=args.enable_lookahead_teacher,
             teacher_sample_rate=args.teacher_sample_rate,
             inference_guardrails=args.inference_guardrails,
+            inference_guardrail_mode=args.inference_guardrail_mode,
             search_guardrail_rate=args.search_guardrail_rate,
+            lookahead_config=getattr(args, "lookahead_config", None),
+            enable_archetype_prediction=getattr(args, "enable_archetype_prediction", True),
         )
         for _ in range(args.num_envs)
     ])
@@ -563,11 +758,14 @@ def run_single_training(args: argparse.Namespace) -> None:
         except RuntimeError:
             env.close()
             raise
-        if not bool(getattr(model.policy.features_extractor, "structured_v2", False)):
+        loaded_structured_v2 = bool(
+            getattr(model.policy.features_extractor, "structured_v2", False)
+        )
+        if not loaded_structured_v2 and args.feature_variant not in {"strategic_vector_v1", "strategic_vector_v2", "strategic_vector_v3"}:
             env.close()
             raise RuntimeError(
                 f"Model {model_path}.zip uses the legacy scalar-card observation and "
-                "cannot be resumed as Observation V2. Keep it as an --opp-model and choose a "
+                "cannot be resumed as the requested feature variant. Keep it as an --opp-model and choose a "
                 "fresh --model-name such as models/ppo_v5_deck_<id>.zip."
             )
         loaded_feature_variant = str(
@@ -578,6 +776,16 @@ def run_single_training(args: argparse.Namespace) -> None:
             raise RuntimeError(
                 f"Feature variant mismatch: checkpoint uses {loaded_feature_variant}, "
                 f"but --feature-variant={args.feature_variant}. Start a fresh model."
+            )
+        loaded_entity_relation_mode = str(
+            getattr(model.policy.features_extractor, "entity_relation_mode", "baseline")
+        )
+        if loaded_entity_relation_mode != args.entity_relation_mode:
+            env.close()
+            raise RuntimeError(
+                "Entity-relation mode mismatch: checkpoint uses "
+                f"{loaded_entity_relation_mode}, but --entity-relation-mode="
+                f"{args.entity_relation_mode}. Start a fresh model."
             )
         loaded_card_table = bool(
             getattr(model.policy.features_extractor, "use_card_table", False)
@@ -614,6 +822,8 @@ def run_single_training(args: argparse.Namespace) -> None:
         if loaded_belief_actor and not args.belief_actor:
             print("Loaded a belief-actor model; continuing with its saved architecture.")
         model.c_aux = args.aux_coef
+        model.distill_coef = args.distill_coef
+        model.value_distill_coef = getattr(args, "value_distill_coef", 0.0)
         model.ent_coef = args.ent_coef
         model.learning_rate = args.lr
         from stable_baselines3.common.utils import get_schedule_fn
@@ -626,42 +836,7 @@ def run_single_training(args: argparse.Namespace) -> None:
             for param_group in model.policy.optimizer.param_groups:
                 param_group['lr'] = args.lr
     else:
-        from src.models.custom_policy import PokemonTCGFeatureExtractor
-        features_dim = getattr(args, "features_dim", 256)
-        hidden_dim = getattr(args, "hidden_dim", 128)
-        policy_kwargs = dict(
-            features_extractor_class=PokemonTCGFeatureExtractor,
-            features_extractor_kwargs={
-                "features_dim": features_dim,
-                "feature_variant": args.feature_variant,
-                "use_card_table": args.card_table,
-            },
-            use_belief_actor=args.belief_actor,
-            belief_dim=args.belief_dim,
-            detach_belief_actor=args.belief_detach,
-        )
-        if features_dim != 256 or hidden_dim != 128:
-            policy_kwargs["net_arch"] = dict(pi=[hidden_dim, hidden_dim], vf=[hidden_dim, hidden_dim])
-        
-        model = CustomPPO(
-            PokemonTCGRecurrentPolicy, 
-            env, 
-            verbose=1, 
-            learning_rate=args.lr,
-            n_steps=args.n_steps,
-            batch_size=args.batch_size,
-            n_epochs=args.n_epochs,
-            gamma=0.999,
-            ent_coef=args.ent_coef,
-            clip_range=args.clip_range,
-            target_kl=args.target_kl,
-            c_aux=args.aux_coef,
-            distill_coef=args.distill_coef,
-            seed=args.seed,
-            device="cpu",
-            tensorboard_log="logs/",
-            policy_kwargs=policy_kwargs
-        )
+        model = build_fresh_custom_ppo(env, args)
     
     endless_training = args.endless or args.timesteps <= 0
     if endless_training:
@@ -688,31 +863,58 @@ def run_single_training(args: argparse.Namespace) -> None:
     else:
         run_name = f"D{deck_id}_vs_D{opp_id}_{run_suffix}"
     
-    run = wandb.init(
-        project="pokemon_kaggle",
-        name=run_name,
-        group=os.environ.get("WANDB_RUN_GROUP", f"deck_{deck_id}"),
-        config=vars(args),
-        sync_tensorboard=True,
-        monitor_gym=True,
-        save_code=True,
-        dir="logs/",
-        mode=os.environ.get("WANDB_MODE", "online"),
-    )
+    run = None
+    if args.wandb_mode != "disabled":
+        run = wandb.init(
+            project="pokemon_kaggle",
+            name=run_name,
+            group=os.environ.get("WANDB_RUN_GROUP", f"deck_{deck_id}"),
+            config=vars(args),
+            sync_tensorboard=True,
+            monitor_gym=True,
+            # Dirty replay files can make W&B's Git diff snapshot several gigabytes.
+            save_code=False,
+            dir="logs/",
+            mode=args.wandb_mode,
+        )
     tb_run_id = getattr(run, "id", None) or str(int(time.time()))
     tb_log_name = os.environ.get("TB_LOG_NAME", f"Deck_{deck_id}_{tb_run_id}")
-    run.config.update({"tb_log_name": tb_log_name}, allow_val_change=True)
+    if run is not None:
+        run.config.update({"tb_log_name": tb_log_name}, allow_val_change=True)
     
     status_total = 0 if endless_training else args.timesteps
     live_status_callback = LiveStatusCallback(action_text=action_text, total_timesteps=status_total)
-    wandb_callback = WandbCallback(
-        gradient_save_freq=0,
-        verbose=2,
-    )
     reward_callback = RewardBreakdownCallback()
-    guardrail_callback = GuardrailMetricsCallback()
-    feature_callback = FeatureMetricsCallback()
-    callbacks = CallbackList([live_status_callback, wandb_callback, reward_callback, guardrail_callback, feature_callback])
+    callbacks_list = [live_status_callback, reward_callback]
+    if opponent_pool and args.pfsp_lite:
+        callbacks_list.append(
+            PFSPCallback(
+                opponent_pool,
+                update_steps=args.pfsp_update_steps,
+                window_games=args.pfsp_window_games,
+            )
+        )
+    if opponent_pool:
+        callbacks_list.append(
+            CheckpointEvaluationCallback(
+                model_path=model_path,
+                deck_path=args.deck,
+                opponent_pool=opponent_pool,
+                interval_steps=args.checkpoint_eval_steps,
+                games_per_opponent=args.checkpoint_eval_games_per_opponent,
+            )
+        )
+    if run is not None:
+        callbacks_list.append(
+            WandbCallback(
+                gradient_save_freq=0,
+                verbose=2,
+            )
+        )
+    if args.extra_metrics:
+        callbacks_list.append(GuardrailMetricsCallback())
+        callbacks_list.append(FeatureMetricsCallback())
+    callbacks = CallbackList(callbacks_list)
 
     def handle_stop_signal(signum, frame):
         raise KeyboardInterrupt
@@ -755,7 +957,8 @@ def run_single_training(args: argparse.Namespace) -> None:
         except Exception:
             pass
         signal.signal(signal.SIGTERM, old_sigterm_handler)
-        run.finish()
+        if run is not None:
+            run.finish()
 
 
 def train(argv: list[str] | None = None) -> None:
@@ -805,4 +1008,3 @@ def train(argv: list[str] | None = None) -> None:
 if __name__ == "__main__":
     os.makedirs("models", exist_ok=True)
     train()
-

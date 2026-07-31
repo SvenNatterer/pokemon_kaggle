@@ -56,13 +56,13 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Create a pie chart showing the opponent deck archetype distribution "
-            "for one downloaded Kaggle bot/submission."
+            "for downloaded Kaggle bot/submission replays."
         )
     )
     parser.add_argument(
         "submission_id",
-        nargs="?",
-        help="Kaggle submission ID (directory below replays/kaggle)",
+        nargs="*",
+        help="One or more Kaggle submission IDs (directories below replays/kaggle)",
     )
     parser.add_argument(
         "--opponent",
@@ -97,6 +97,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "SVG output path "
             "(default: reports/deck_analysis/opponent-decks-SUBMISSION_ID.svg)"
         ),
+    )
+    parser.add_argument(
+        "--title",
+        type=str,
+        help="Custom title header for the SVG pie chart",
+    )
+    parser.add_argument(
+        "--subtitle",
+        type=str,
+        help="Custom subtitle text for the SVG pie chart",
     )
     parser.add_argument(
         "--top",
@@ -255,9 +265,13 @@ def load_submission_name(replay_root: Path, submission_id: str) -> str | None:
         return None
 
 
-def discover_replays(replay_root: Path, submission_id: str) -> list[Path]:
-    directory = replay_root / str(submission_id)
-    return sorted(directory.glob("*-replay.json")) if directory.is_dir() else []
+def discover_replays(replay_root: Path, submission_ids: Sequence[str]) -> list[Path]:
+    paths: list[Path] = []
+    for sub_id in submission_ids:
+        directory = replay_root / str(sub_id)
+        if directory.is_dir():
+            paths.extend(sorted(directory.glob("*-replay.json")))
+    return paths
 
 
 def list_submissions(replay_root: Path) -> int:
@@ -285,7 +299,7 @@ def list_submissions(replay_root: Path) -> int:
     print(f"{'-' * 12} {'-' * 7}  {'-' * 40}")
     for submission_id, count, description in sorted(rows, key=lambda row: int(row[0])):
         print(f"{submission_id:<12} {count:>7}  {description}")
-    print("\nUsage: python scripts/show_kaggle_opponent_decks.py SUBMISSION_ID")
+    print("\nUsage: python scripts/show_kaggle_opponent_decks.py SUBMISSION_ID...")
     print("The default output is an SVG pie chart in the current directory.")
     return 0
 
@@ -348,6 +362,9 @@ def write_pie_chart(
     distribution: Counter[str],
     submission_id: str,
     top: int = 9,
+    title: str | None = None,
+    subtitle: str | None = None,
+    model_count: int | None = None,
 ) -> None:
     if top < 2:
         raise ValueError("--top must be at least 2")
@@ -362,17 +379,28 @@ def write_pie_chart(
         "#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed",
         "#0891b2", "#db2777", "#65a30d", "#64748b",
     ]
+
+    header_title = title or f"Opponent deck archetypes · {html.escape(submission_id)}"
+    num_models_str = f" across {model_count} replay-backed models" if model_count and model_count > 1 else ""
+    header_sub = subtitle or f"{total} Kaggle matches{num_models_str} · strongest Pokémon per reconstructed deck"
+
     pieces = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}" role="img" aria-labelledby="title desc">',
-        f'<title id="title">Opponent deck archetypes for Kaggle submission {html.escape(submission_id)}</title>',
+        f'<title id="title">{html.escape(header_title)}</title>',
         f'<desc id="desc">Pie chart of {total} matches grouped by inferred opponent deck archetype.</desc>',
         '<rect width="100%" height="100%" fill="#ffffff"/>',
-        '<style>text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#172033}'
-        '.title{font-size:26px;font-weight:600}.sub{font-size:15px;fill:#64748b}'
-        '.legend{font-size:16px}.value{font-weight:600}</style>',
-        f'<text x="40" y="48" class="title">Opponent deck archetypes · {html.escape(submission_id)}</text>',
-        f'<text x="40" y="76" class="sub">{total} Kaggle matches · strongest Pokémon per reconstructed deck</text>',
+        '<style>',
+        'text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }',
+        '.hdr { font-size: 26px; font-weight: 700; fill: #0f172a; }',
+        '.subhdr { font-size: 15px; fill: #475569; }',
+        '.legend { font-size: 15px; fill: #1e293b; }',
+        '.legend.value { font-weight: 600; }',
+        '.title { font-size: 42px; font-weight: 800; fill: #0f172a; }',
+        '.sub { font-size: 14px; text-transform: uppercase; letter-spacing: 1px; fill: #64748b; }',
+        '</style>',
+        f'<text x="50" y="55" class="hdr">{html.escape(header_title)}</text>',
+        f'<text x="50" y="85" class="subhdr">{html.escape(header_sub)}</text>',
     ]
 
     start = -math.pi / 2
@@ -389,7 +417,7 @@ def write_pie_chart(
             pieces.append(
                 f'<path d="M {cx} {cy} L {x1:.3f} {y1:.3f} '
                 f'A {radius} {radius} 0 {large_arc} 1 {x2:.3f} {y2:.3f} Z" '
-                f'fill="{color}" stroke="#ffffff" stroke-width="3"/>'
+                f'fill="{color}" stroke="#ffffff" stroke-width="2"/>'
             )
         start = end
 
@@ -483,10 +511,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not args.submission_id:
         return list_submissions(replay_root)
 
-    replay_paths = discover_replays(replay_root, args.submission_id)
+    submission_ids = [str(sid) for sid in args.submission_id]
+    replay_paths = discover_replays(replay_root, submission_ids)
     if not replay_paths:
         print(
-            f"No replay files found for submission {args.submission_id} below {replay_root}",
+            f"No replay files found for submission(s) {', '.join(submission_ids)} below {replay_root}",
             file=sys.stderr,
         )
         return 1
@@ -497,8 +526,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Cannot read card data: {exc}", file=sys.stderr)
         return 1
 
-    own_name = load_submission_name(replay_root, args.submission_id)
-    decks = [deck for path in replay_paths if (deck := read_replay(path, own_name)) is not None]
+    decks: list[ReplayDeck] = []
+    for sub_id in submission_ids:
+        own_name = load_submission_name(replay_root, sub_id)
+        sub_paths = discover_replays(replay_root, [sub_id])
+        decks.extend(
+            [deck for path in sub_paths if (deck := read_replay(path, own_name)) is not None]
+        )
+
     if args.opponent:
         query = args.opponent.casefold()
         decks = [deck for deck in decks if query in deck.opponent_name.casefold()]
@@ -508,18 +543,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     decks.sort(key=lambda deck: (deck.opponent_name.casefold(), deck.episode_id))
+    label_sub = "-".join(submission_ids) if len(submission_ids) <= 3 else f"{len(submission_ids)}-subs"
+
     if args.json:
-        print(json.dumps(json_payload(decks, card_data, str(args.submission_id)), ensure_ascii=False, indent=2))
+        print(json.dumps(json_payload(decks, card_data, label_sub), ensure_ascii=False, indent=2))
     elif args.details:
-        print_text(decks, card_data, str(args.submission_id))
+        print_text(decks, card_data, label_sub)
     else:
         distribution = archetype_distribution(decks, card_data)
         output = (
             args.output
-            or DEFAULT_REPORT_DIR / f"opponent-decks-{args.submission_id}.svg"
+            or DEFAULT_REPORT_DIR / f"opponent-decks-{label_sub}.svg"
         ).expanduser().resolve()
         try:
-            write_pie_chart(output, distribution, str(args.submission_id), args.top)
+            write_pie_chart(
+                path=output,
+                distribution=distribution,
+                submission_id=label_sub,
+                top=args.top,
+                title=args.title,
+                subtitle=args.subtitle,
+                model_count=len(submission_ids),
+            )
         except (OSError, ValueError) as exc:
             print(f"Cannot create pie chart: {exc}", file=sys.stderr)
             return 1

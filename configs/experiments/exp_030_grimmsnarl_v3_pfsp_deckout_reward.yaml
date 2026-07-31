@@ -1,0 +1,39 @@
+# EXP-030: EXP-029 restart with reduced terminal reward for deck-out wins.
+deck: decks/deck_bank/deck_grimmsnarl_ex_kaggle.csv
+model_name: models/training_v6/ppo_v6_grimmsnarl_ex_strategic_vector_v3_pfsp_deckout_reward_2m_seed11.zip
+opp_pool: decks/pools/default_training.json
+total_timesteps: 2000000
+learning_rate: 0.0001
+n_steps: 512
+batch_size: 1024
+n_epochs: 2
+clip_range: 0.12
+target_kl: 0.03
+ent_coef: 0.008
+num_envs: 4
+torch_threads: 2
+seed: 11
+
+scalar_obs: true
+feature_variant: strategic_vector_v3
+aux_coef: 0.0
+distill_coef: 0.0
+value_distill_coef: 0.0
+enable_lookahead_teacher: false
+teacher_sample_rate: 0.0
+belief_actor: false
+card_table: false
+inference_guardrails: true
+inference_guardrail_mode: active
+search_guardrail_rate: 0.0
+enable_archetype_prediction: true
+extra_metrics: true
+wandb_mode: online
+sparse_rewards: true
+rewards:
+  DECK_OUT_WIN: 0.3
+
+pfsp_update_steps: 250000
+pfsp_window_games: 150
+checkpoint_eval_steps: 3000000
+checkpoint_eval_games_per_opponent: 50

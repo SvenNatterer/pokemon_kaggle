@@ -242,41 +242,54 @@ class LookaheadTeacher:
         actor = _as_int(getattr(observation.current, "yourIndex", None), -1)
         maximizing = actor == perspective
         previewed: list[tuple[float, Any]] = []
+        created_children: list[Any] = []
+        try:
+            # Preview children once, retain the strongest beam and then recurse.
+            for selection in selections:
+                if not budget.spend():
+                    break
+                child = self._search_step(node.searchId, selection)
+                created_children.append(child)
+                preview = self._terminal_score(child.observation, perspective, depth + 1)
+                if preview is None:
+                    preview = self._heuristic_score(child.observation, perspective)
+                previewed.append((float(preview), child))
 
-        # Preview children once, retain the strongest beam and then recurse.
-        for selection in selections:
-            if not budget.spend():
-                break
-            child = self._search_step(node.searchId, selection)
-            preview = self._terminal_score(child.observation, perspective, depth + 1)
-            if preview is None:
-                preview = self._heuristic_score(child.observation, perspective)
-            previewed.append((float(preview), child))
+            if not previewed:
+                return self._heuristic_score(observation, perspective)
 
-        if not previewed:
-            return self._heuristic_score(observation, perspective)
+            previewed.sort(key=lambda item: item[0], reverse=maximizing)
+            retained = [child for _, child in previewed[: self.config.beam_width]]
+            discarded = [child for _, child in previewed[self.config.beam_width :]]
 
-        previewed.sort(key=lambda item: item[0], reverse=maximizing)
-        retained = previewed[: self.config.beam_width]
-        discarded = previewed[self.config.beam_width :]
-        for _, child in discarded:
-            self._safe_release(child.searchId)
-
-        values: list[float] = []
-        for _, child in retained:
-            try:
-                values.append(
-                    self._minimax(
-                        child,
-                        perspective=perspective,
-                        depth=depth + 1,
-                        budget=budget,
-                    )
-                )
-            finally:
+            for child in discarded:
                 self._safe_release(child.searchId)
+                if child in created_children:
+                    created_children.remove(child)
 
-        return (max if maximizing else min)(values)
+            values: list[float] = []
+            for child in retained:
+                try:
+                    values.append(
+                        self._minimax(
+                            child,
+                            perspective=perspective,
+                            depth=depth + 1,
+                            budget=budget,
+                        )
+                    )
+                finally:
+                    self._safe_release(child.searchId)
+                    if child in created_children:
+                        created_children.remove(child)
+
+            if not values:
+                return self._heuristic_score(observation, perspective)
+
+            return (max if maximizing else min)(values)
+        finally:
+            for child in created_children:
+                self._safe_release(child.searchId)
 
     def _candidate_selections(self, observation) -> list[list[int]]:
         select = getattr(observation, "select", None)

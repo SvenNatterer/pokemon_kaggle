@@ -25,8 +25,8 @@ if [[ "$ARCHIVE" != *.tar.gz ]]; then
   exit 1
 fi
 
-if ! tar -tzf "$ARCHIVE" main.py deck.csv ppo_pokemon_final.zip >/dev/null; then
-  echo "Submission archive is invalid or missing main.py, deck.csv, or ppo_pokemon_final.zip: $ARCHIVE" >&2
+if ! tar -tzf "$ARCHIVE" main.py deck.csv >/dev/null; then
+  echo "Submission archive is invalid or missing main.py or deck.csv: $ARCHIVE" >&2
   exit 1
 fi
 

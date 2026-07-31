@@ -1,0 +1,67 @@
+{
+  "result": {
+    "cached": false,
+    "candidate": "ppo_v6_exp020_relational_entity_attention_seed11",
+    "crashed": false,
+    "details": {
+      "candidate_win_reasons": {
+        "benchout": 4,
+        "deckout": 13
+      },
+      "mean_turns": 32.19,
+      "opponent_win_reasons": {
+        "benchout": 39,
+        "prize": 44
+      },
+      "perspective": {
+        "player_0": {
+          "draws": 0,
+          "games": 50,
+          "losses": 42,
+          "mean_turns": 33.36,
+          "turns": 1668,
+          "wins": 8
+        },
+        "player_1": {
+          "draws": 0,
+          "games": 50,
+          "losses": 41,
+          "mean_turns": 31.02,
+          "turns": 1551,
+          "wins": 9
+        }
+      },
+      "reason_counts": {
+        "benchout": 43,
+        "deckout": 13,
+        "prize": 44
+      },
+      "total_turns": 3219
+    },
+    "draws": 0,
+    "error": "",
+    "games": 100,
+    "losses": 83,
+    "opponent": "ppo_v6_compact_b_bank_49",
+    "score": 17.0,
+    "score_rate": 0.17,
+    "seconds": 85.94963470799848,
+    "win_rate": 0.17,
+    "wins": 17
+  },
+  "saved_at": "2026-07-30T07:06:04.795557+00:00",
+  "signature": {
+    "candidate": {
+      "deck_sha256": "efcf2b165f2e8915a3c7b4710b0b43e68ae77aaad7f713f98400c6544d473a05",
+      "model_sha256": "542403cc530104bd45899548ccebe716fa11f9950ff11a4c0b8ad98610e11194"
+    },
+    "games": 100,
+    "lookahead": false,
+    "lookahead_config": null,
+    "opponent": {
+      "deck_sha256": "7ac3942b4125c95426634c968f81a4c87b96c7f1bb46a4c069b37119f78d6f4c",
+      "model_sha256": "045bc1dcff7b77abd878e589e6177d43678c7f941640326092af2dcceec24268"
+    },
+    "version": 1
+  }
+}

@@ -1,0 +1,37 @@
+# EXP-025: isolated strategic scalar observation-vector ablation on Alakazam
+deck: decks/deck_bank/bank_54.csv
+model_name: models/ppo_v6_exp025_strategic_vector_v1_alakazam_seed11.zip
+opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
+total_timesteps: 1000000
+learning_rate: 0.0001
+n_steps: 512
+batch_size: 1024
+n_epochs: 2
+clip_range: 0.12
+target_kl: 0.03
+ent_coef: 0.008
+num_envs: 4
+torch_threads: 0
+seed: 11
+
+# Representation under test
+scalar_obs: true
+feature_variant: strategic_vector_v1
+
+# Disable other learning helpers for a clean ablation
+aux_coef: 0.0
+distill_coef: 0.0
+value_distill_coef: 0.0
+enable_lookahead_teacher: false
+teacher_sample_rate: 0.0
+belief_actor: false
+card_table: false
+inference_guardrails: false
+inference_guardrail_mode: "off"
+search_guardrail_rate: 0.0
+enable_archetype_prediction: false
+extra_metrics: false
+wandb_mode: online
+
+# Reward-side simplification
+sparse_rewards: true

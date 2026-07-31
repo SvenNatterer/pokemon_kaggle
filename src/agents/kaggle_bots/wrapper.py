@@ -50,6 +50,11 @@ def is_python_script_agent_spec(value: Any) -> bool:
     return False
 
 
+import gymnasium as gym
+
+V6_ACTION_SPACE_SIZE = 66
+
+
 class KagglePythonAgentWrapper:
     """Wraps a standalone Kaggle python script `agent(obs_dict, config)` for compatibility with load_bot."""
 
@@ -70,6 +75,9 @@ class KagglePythonAgentWrapper:
             raise AttributeError(f"Script {self.script_path} does not export an `agent` function")
 
         self._agent_fn: Callable[[dict[str, Any]], Any] = module.agent
+        self.action_space = gym.spaces.Discrete(V6_ACTION_SPACE_SIZE)
+        self.observation_space = None
+        self.is_structured = False
 
     def predict(
         self,
@@ -79,8 +87,15 @@ class KagglePythonAgentWrapper:
         deterministic: bool = True,
     ) -> tuple[np.ndarray | int, Any]:
         """Invoke Kaggle Python agent with observation dictionary and return selected action index."""
+        action_mask = None
         if isinstance(observation, dict):
-            obs_payload = observation
+            action_mask = observation.get("action_mask")
+            if "raw_obs" in observation and observation["raw_obs"]:
+                obs_payload = observation["raw_obs"]
+            elif "obs_dict" in observation and observation["obs_dict"]:
+                obs_payload = observation["obs_dict"]
+            else:
+                obs_payload = observation
         else:
             obs_payload = {"vector": observation}
 
@@ -95,6 +110,15 @@ class KagglePythonAgentWrapper:
             action = int(raw_action)
         else:
             action = 0
+
+        action = max(0, min(action, V6_ACTION_SPACE_SIZE - 1))
+
+        if action_mask is not None:
+            mask = np.asarray(action_mask).reshape(-1)
+            if not (0 <= action < len(mask) and mask[action]):
+                legal_indices = np.flatnonzero(mask)
+                if len(legal_indices) > 0:
+                    action = int(legal_indices[0])
 
         return np.array(action, dtype=np.int64), state
 

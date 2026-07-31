@@ -1,0 +1,36 @@
+# EXP-022: Production-Contract Guardrails in Shadow Mode
+# Proposals are measured and verified but do not alter the action mask.
+deck: decks/deck_bank/bank_38.csv
+model_name: models/ppo_v6_exp022_guardrails_shadow_seed11.zip
+opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
+total_timesteps: 1000000
+learning_rate: 0.0001
+n_steps: 512
+batch_size: 2048
+n_epochs: 2
+clip_range: 0.12
+ent_coef: 0.008
+aux_coef: 0.1
+distill_coef: 0.1
+teacher_sample_rate: 0.01
+num_envs: 4
+torch_threads: 0
+features_dim: 256
+hidden_dim: 128
+seed: 11
+inference_guardrails: true
+inference_guardrail_mode: shadow
+search_guardrail_rate: 0.075
+wandb_mode: online
+
+lookahead:
+  max_depth: 1
+  beam_width: 2
+  node_budget: 8
+  max_combinations: 16
+
+rewards:
+  STEP_PENALTY: -0.001
+  DECK_OUT_PENALTY: -0.50
+  DECK_SHRINK: -0.005
+  DECK_LOW_COUNT_MULT: 4.0

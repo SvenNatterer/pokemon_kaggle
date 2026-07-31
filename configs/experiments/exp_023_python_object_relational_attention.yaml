@@ -1,0 +1,39 @@
+# EXP-023: Python-Object Relation Attention Compatibility Ablation
+# Fresh model only. Run seeds 11, 23, and 37 with a distinct model_name.
+# This intentionally rebuilds the visible 12-slot relation graph through Python
+# objects on every forward pass to measure the legacy list/object overhead.
+deck: decks/deck_bank/bank_38.csv
+model_name: models/ppo_v6_exp023_python_object_relational_attention_seed11.zip
+opp_pool: decks/pools/kaggle_rule_bots_dev_pool.json
+total_timesteps: 1000000
+learning_rate: 0.0001
+n_steps: 512
+batch_size: 2048
+n_epochs: 2
+clip_range: 0.12
+ent_coef: 0.008
+aux_coef: 0.1
+distill_coef: 0.1
+teacher_sample_rate: 0.01
+num_envs: 4
+torch_threads: 0
+features_dim: 256
+hidden_dim: 128
+seed: 11
+entity_relation_mode: python_object_relational
+inference_guardrails: true
+inference_guardrail_mode: active
+search_guardrail_rate: 0.0
+wandb_mode: online
+
+lookahead:
+  max_depth: 1
+  beam_width: 2
+  node_budget: 8
+  max_combinations: 16
+
+rewards:
+  STEP_PENALTY: -0.001
+  DECK_OUT_PENALTY: -0.50
+  DECK_SHRINK: -0.005
+  DECK_LOW_COUNT_MULT: 4.0

@@ -273,34 +273,170 @@ class GuardrailMetricsCallback(BaseCallback):
 
     def __init__(self, verbose: int = 0):
         super().__init__(verbose)
+        self._previous_results: list[dict[str, Any]] = []
+        self._collection_error: str | None = None
 
     def _on_step(self) -> bool:
         return True
 
-    def _on_rollout_end(self) -> None:
+    def _collect_results(self) -> list[dict[str, Any]]:
+        self._collection_error = None
+        results = []
         if hasattr(self.training_env, "env_method"):
             try:
                 results = self.training_env.env_method("get_guardrail_metrics")
-                total_interventions = 0.0
-                rule_counts: Counter[str] = Counter()
+            except Exception as error:
+                self._collection_error = f"{type(error).__name__}: {error}"
+                results = []
+        elif hasattr(self.training_env, "get_guardrail_metrics"):
+            try:
+                results = [self.training_env.get_guardrail_metrics()]
+            except Exception as error:
+                self._collection_error = f"{type(error).__name__}: {error}"
+                results = []
+        elif hasattr(self.training_env, "envs"):
+            try:
+                results = [
+                    e.get_guardrail_metrics()
+                    for e in getattr(self.training_env, "envs", [])
+                    if hasattr(e, "get_guardrail_metrics")
+                ]
+            except Exception as error:
+                self._collection_error = f"{type(error).__name__}: {error}"
+                results = []
+        return [result for result in results if isinstance(result, dict)]
 
-                for res in results:
-                    if isinstance(res, dict):
-                        total_interventions += float(res.get("total_interventions", 0.0))
-                        by_rule = res.get("by_rule", {})
-                        if isinstance(by_rule, dict):
-                            for rname, cnt in by_rule.items():
-                                rule_counts[rname] += int(cnt)
+    @staticmethod
+    def _counter_delta(current: float, previous: float) -> float:
+        # A worker restart resets its monotonic counters; treat the new value
+        # as the complete delta instead of producing a negative rollout.
+        return current - previous if current >= previous else current
 
-                self.logger.record("guardrails/total_interventions", total_interventions)
-                for rname, cnt in rule_counts.items():
-                    self.logger.record(f"guardrails/rule/{rname}", float(cnt))
+    @classmethod
+    def summarize_results(
+        cls,
+        results: list[dict[str, Any]],
+        previous_results: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        previous_results = previous_results or []
+        scalar_keys = (
+            "decisions_total",
+            "proposals_total",
+            "accepted_total",
+            "rolled_back_total",
+            "shadow_total",
+            "search_failures_total",
+        )
+        totals = {key: 0.0 for key in scalar_keys}
+        deltas = {key: 0.0 for key in scalar_keys}
+        known_rules: set[str] = set()
+        rule_totals: Counter[str] = Counter()
+        rule_deltas: Counter[str] = Counter()
 
-                if wandb is not None and wandb.run is not None and len(rule_counts) > 0:
-                    data = [[rule, count] for rule, count in rule_counts.items()]
-                    table = wandb.Table(data=data, columns=["Rule", "Interventions"])
-                    barplot = wandb.plot.bar(table, "Rule", "Interventions", title="Guardrail Interventions by Rule")
-                    wandb.log({"guardrails/interventions_barplot": barplot})
-            except Exception:
-                pass
+        for index, result in enumerate(results):
+            previous = previous_results[index] if index < len(previous_results) else {}
+            for key in scalar_keys:
+                current_value = float(result.get(key, 0.0))
+                previous_value = float(previous.get(key, 0.0))
+                totals[key] += current_value
+                deltas[key] += cls._counter_delta(current_value, previous_value)
 
+            current_rules = result.get("by_rule", {})
+            previous_rules = previous.get("by_rule", {})
+            if not isinstance(current_rules, dict):
+                current_rules = {}
+            if not isinstance(previous_rules, dict):
+                previous_rules = {}
+            known_rules.update(str(name) for name in result.get("known_rules", ()))
+            known_rules.update(str(name) for name in current_rules)
+            for name in known_rules | {str(rule) for rule in current_rules}:
+                current_value = float(current_rules.get(name, 0.0))
+                previous_value = float(previous_rules.get(name, 0.0))
+                rule_totals[name] += current_value
+                rule_deltas[name] += cls._counter_delta(current_value, previous_value)
+
+        accepted_delta = deltas["accepted_total"]
+        decision_delta = deltas["decisions_total"]
+        return {
+            "totals": totals,
+            "deltas": deltas,
+            "known_rules": sorted(known_rules),
+            "by_rule": {
+                name: float(rule_totals.get(name, 0.0)) for name in sorted(known_rules)
+            },
+            "by_rule_rollout": {
+                name: float(rule_deltas.get(name, 0.0)) for name in sorted(known_rules)
+            },
+            "intervention_rate_per_1000": (
+                1000.0 * accepted_delta / decision_delta if decision_delta > 0 else 0.0
+            ),
+        }
+
+    @staticmethod
+    def barplot_rows(summary: dict[str, Any]) -> list[list[Any]]:
+        counts = summary.get("by_rule", {})
+        return [
+            [name, float(counts.get(name, 0.0))]
+            for name in sorted(
+                summary.get("known_rules", ()),
+                key=lambda rule: (-float(counts.get(rule, 0.0)), str(rule)),
+            )
+        ]
+
+    def _on_rollout_end(self) -> None:
+        results = self._collect_results()
+        summary = self.summarize_results(results, self._previous_results)
+        self._previous_results = results
+        totals = summary["totals"]
+        deltas = summary["deltas"]
+
+        # Keep the legacy key while adding unambiguous total/rollout series.
+        self.logger.record("guardrails/total_interventions", totals["accepted_total"])
+        self.logger.record("guardrails/interventions_total", totals["accepted_total"])
+        self.logger.record("guardrails/interventions_rollout", deltas["accepted_total"])
+        self.logger.record(
+            "guardrails/intervention_rate_per_1000",
+            summary["intervention_rate_per_1000"],
+        )
+        self.logger.record("guardrails/proposals_rollout", deltas["proposals_total"])
+        self.logger.record(
+            "guardrails/proposals_rolled_back",
+            deltas["rolled_back_total"],
+        )
+        self.logger.record("guardrails/shadow_proposals", deltas["shadow_total"])
+        self.logger.record(
+            "guardrails/search_failures",
+            deltas["search_failures_total"],
+        )
+        self.logger.record(
+            "guardrails/metrics_collection_error",
+            float(self._collection_error is not None),
+        )
+        for rule_name, count in summary["by_rule"].items():
+            # Full rule names are useful in W&B/TensorBoard but collide after
+            # Stable-Baselines' console formatter truncates them to 36 chars.
+            self.logger.record(
+                f"guardrails/rule/{rule_name}",
+                count,
+                exclude="stdout",
+            )
+
+        rows = self.barplot_rows(summary)
+        if wandb is not None and wandb.run is not None and rows:
+            try:
+                table = wandb.Table(data=rows, columns=["Rule", "Interventions"])
+                barplot = wandb.plot.bar(
+                    table,
+                    "Rule",
+                    "Interventions",
+                    title="Accepted Guardrail Interventions by Rule",
+                )
+                wandb.log(
+                    {"guardrails/interventions_barplot": barplot},
+                    commit=False,
+                )
+                self.logger.record("guardrails/barplot_logging_error", 0.0)
+            except Exception as error:
+                self.logger.record("guardrails/barplot_logging_error", 1.0)
+                if self.verbose:
+                    print(f"Guardrail W&B barplot logging failed: {type(error).__name__}: {error}")
